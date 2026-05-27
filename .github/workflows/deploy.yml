@@ -1,0 +1,22 @@
+name: Deploy FinançasPro
+on:
+  repository_dispatch:
+    types: [update-app]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      - name: Write app file
+        run: |
+          echo "${{ github.event.client_payload.content }}" | base64 -d > docs/financas-pro.html
+      - name: Commit and push
+        run: |
+          git config user.email "bot@financas"
+          git config user.name "FinancasBot"
+          mkdir -p docs
+          git add docs/financas-pro.html
+          git commit -m "Update app $(date)" || echo "Nothing to commit"
+          git push
