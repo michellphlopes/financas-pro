@@ -293,8 +293,8 @@ document.getElementById('tbd').textContent=`${now.getDate()} ${MS[now.getMonth()
 const fmt=v=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v||0);
 const td=()=>new Date().toISOString().slice(0,10);
 const uid=()=>Math.random().toString(36).slice(2,9);
-const CC={Alimentação:'#f59e0b',Moradia:'#06b6d4',Transporte:'#8b5cf6',Saúde:'#22c55e',Lazer:'#ec4899',Educação:'#3b82f6',Outros:'#94a3b8','Juros Dívida':'#ff3d5a',Parcelado:'#7c3aed'};
-const CI={Alimentação:'🍽️',Moradia:'🏠',Transporte:'🚗',Saúde:'💊',Lazer:'🎮',Educação:'📚',Outros:'📦','Juros Dívida':'💸',Parcelado:'🛒'};
+const CC={Alimentação:'#f59e0b',Moradia:'#06b6d4',Transporte:'#8b5cf6',Saúde:'#22c55e',Lazer:'#ec4899',Educação:'#3b82f6',Outros:'#94a3b8','Juros Dívida':'#ff3d5a',Parcelado:'#7c3aed',Fixo:'#0ea5e9'};
+const CI={Alimentação:'🍽️',Moradia:'🏠',Transporte:'🚗',Saúde:'💊',Lazer:'🎮',Educação:'📚',Outros:'📦','Juros Dívida':'💸',Parcelado:'🛒',Fixo:'📌'};
 const FERIADOS={'2026-01-01':'Ano Novo','2026-02-16':'Carnaval','2026-02-17':'Carnaval','2026-04-03':'Sexta-Feira Santa','2026-04-21':'Tiradentes','2026-05-01':'Dia do Trabalho','2026-06-04':'Corpus Christi','2026-09-07':'Independência','2026-10-12':'N.Sra.Aparecida','2026-11-02':'Finados','2026-11-15':'República','2026-12-25':'Natal'};
 
 let S={
@@ -327,6 +327,7 @@ async function loadAll(){
     S.df=df.data||[];
     if(es&&es.data){S.est=es.data;S.re=Number(es.data.renda)||0;}
     S.obs=ob.data||[];
+    await syncFixas();
     render();
   }catch(e){
     console.error('Erro loadAll:',e);
@@ -341,7 +342,55 @@ async function syncJuros(){
   S.dm=S.dm.filter(d=>d.categoria!=='Juros Dívida');
   try{await sb.from('despesas_mes').delete().like('id','juros_%');}catch(e){}
   for(const div of S.dividas){
-    if(div.lancar_juros_despesa){const j=calcJuros(div);if(j>0){const r={id:'juros_'+div.id,nome:`Juros: ${div.nome}`,valor:j,categoria:'Juros Dívida',data:td(),status:'aberto',historico:[]};await sb.from('despesas_mes').upsert(r);const i=S.dm.findIndex(x=>x.id===r.id);if(i>=0)S.dm[i]=r;else S.dm.push(r);}}
+    if(div.lancar_juros_despesa){const j=calcJuros(div);if(j>0){const r={id:'juros_'+div.id,nome:`Juros: ${div.nome}`,valor:j,categoria:'Juros Dívida',data:div.vencimento||td(),status:'aberto',historico:[]};await sb.from('despesas_mes').upsert(r);const i=S.dm.findIndex(x=>x.id===r.id);if(i>=0)S.dm[i]=r;else S.dm.push(r);}}
+  }
+}
+
+async function syncFixas(){
+  // Gera lançamentos automáticos das despesas fixas nos últimos 3 meses + mês atual
+  const hoje=new Date();
+  const meses=[];
+  for(let i=2;i>=0;i--){
+    const d=new Date(hoje.getFullYear(),hoje.getMonth()-i,1);
+    meses.push({ano:d.getFullYear(),mes:d.getMonth()+1});
+  }
+
+  for(const fixa of S.df){
+    for(const {ano,mes} of meses){
+      const mesStr=String(mes).padStart(2,'0');
+      const diaStr=String(fixa.dia).padStart(2,'0');
+      const dataVenc=`${ano}-${mesStr}-${diaStr}`;
+      const idFixa=`fixa_${fixa.id}_${ano}_${mesStr}`;
+
+      // Verifica se já existe lançamento para esse mês
+      const jaExiste=S.dm.find(d=>d.id===idFixa);
+      if(jaExiste) continue;
+
+      // Verifica se já foi pago manualmente (mesmo nome, mesmo mês)
+      const pagaManual=S.dm.find(d=>
+        d.nome===fixa.nome &&
+        d.data&&d.data.startsWith(`${ano}-${mesStr}`) &&
+        d.id!==idFixa
+      );
+      if(pagaManual) continue;
+
+      // Determina status: se data de vencimento já passou e não está pago = atrasado
+      const status=dataVenc<td()?'atrasado':'aberto';
+
+      const r={
+        id:idFixa,
+        nome:fixa.nome,
+        valor:fixa.valor,
+        categoria:'Fixo',
+        data:dataVenc,
+        status,
+        historico:[],
+        parcelado:false,
+        origem_fixa:fixa.id
+      };
+      await sb.from('despesas_mes').upsert(r);
+      S.dm.push(r);
+    }
   }
 }
 
@@ -585,17 +634,88 @@ async function remCart(id){await sb.from('cartoes').delete().eq('id',id);S.carto
 
 // ── DESPESAS MÊS ──────────────────────────────────────────────────────────────
 function rDm(){
-  const CATS=['Alimentação','Moradia','Transporte','Saúde','Lazer','Educação','Outros'];
   let items=[...S.dm];
   if(S.filtroDm==='pago')items=items.filter(d=>d.status==='pago');
   if(S.filtroDm==='aberto')items=items.filter(d=>d.status==='aberto'&&d.data>=td());
   if(S.filtroDm==='atrasado')items=items.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto'));
-  if(S.sortDm==='data-desc')items.sort((a,b)=>b.data.localeCompare(a.data));if(S.sortDm==='data-asc')items.sort((a,b)=>a.data.localeCompare(b.data));if(S.sortDm==='val-desc')items.sort((a,b)=>Number(b.valor)-Number(a.valor));if(S.sortDm==='val-asc')items.sort((a,b)=>Number(a.valor)-Number(b.valor));
-  const tot=S.dm.reduce((s,d)=>s+Number(d.valor),0);const pagas=S.dm.filter(d=>d.status==='pago').length;const atras=S.dm.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
-  return`<div class="ph"><div class="ph-t">Despesas do Mês</div><div class="ph-s">Controle completo dos seus gastos</div></div>
-  <div class="stats"><div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">🧾</div><div class="sc-lbl">Total</div><div class="sc-v r">${fmt(tot)}</div></div><div class="sc"><div class="sc-ac" style="background:var(--g1)"></div><div class="sc-ico" style="background:var(--gl)">✅</div><div class="sc-lbl">Pagas</div><div class="sc-v g">${pagas}</div></div><div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">⚠️</div><div class="sc-lbl">Atrasadas</div><div class="sc-v r">${atras}</div></div></div>
-  <div class="sh"><div class="filtros"><button class="fb ${S.filtroDm==='todos'?'on':''}" onclick="setFDm('todos')">Todas</button><button class="fb ${S.filtroDm==='pago'?'on-g':''}" onclick="setFDm('pago')">✅ Pagas</button><button class="fb ${S.filtroDm==='aberto'?'on':''}" onclick="setFDm('aberto')">○ Abertas</button><button class="fb ${S.filtroDm==='atrasado'?'on-r':''}" onclick="setFDm('atrasado')">⚠️ Atrasadas</button><button class="fb ${S.sortDm==='val-desc'?'on':''}" onclick="setSortDm('val-desc')">↓ Valor</button><button class="fb ${S.sortDm==='val-asc'?'on':''}" onclick="setSortDm('val-asc')">↑ Valor</button></div><div style="display:flex;gap:7px"><button class="btn btn-p btn-sm" onclick="openM('add-dm')">+ Normal</button><button class="btn btn-o btn-sm" onclick="openM('add-parc')">🛒 Parcelada</button></div></div>
-  ${items.map(d=>{const isPg=d.status==='pago';const isAt=d.status==='atrasado'||(d.data<td()&&d.status==='aberto');return`<div class="dr ${isPg?'paga':isAt?'atrasada':''}" onclick="openM('det-dm','${d.id}')"><div class="dr-ico" style="background:${CC[d.categoria]||'#94a3b8'}18"><span>${CI[d.categoria]||'📦'}</span></div><div class="dr-info"><div class="dr-n">${d.nome}${d.parcelado?`<span class="pt" style="margin-left:6px">📦 ${d.parcela_atual}/${d.total_parcelas}${(d.atrasadas_qtd||0)>0?` ⚠️${d.atrasadas_qtd}at.`:''}</span>`:''}</div><div class="dr-m">${d.data} · ${d.categoria}</div></div><div class="dr-v">${fmt(d.valor)}</div><button class="sp ${isPg?'sp-pg':isAt?'sp-at':'sp-ab'}" onclick="event.stopPropagation();cycDm('${d.id}')">${isPg?'✅':isAt?'⚠️':'○'}</button></div>`;}).join('')||'<p style="color:var(--t3);text-align:center;padding:20px;font-weight:600">Nenhuma despesa.</p>'}`;
+  if(S.sortDm==='data-desc')items.sort((a,b)=>b.data.localeCompare(a.data));
+  if(S.sortDm==='data-asc')items.sort((a,b)=>a.data.localeCompare(b.data));
+  if(S.sortDm==='val-desc')items.sort((a,b)=>Number(b.valor)-Number(a.valor));
+  if(S.sortDm==='val-asc')items.sort((a,b)=>Number(a.valor)-Number(b.valor));
+
+  const tot=S.dm.reduce((s,d)=>s+Number(d.valor),0);
+  const pagas=S.dm.filter(d=>d.status==='pago').length;
+  const atras=S.dm.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
+
+  // Agrupar por mês
+  const grupos={};
+  items.forEach(d=>{
+    const mes=d.data?d.data.slice(0,7):'sem-data';
+    if(!grupos[mes])grupos[mes]=[];
+    grupos[mes].push(d);
+  });
+  const mesesOrdenados=Object.keys(grupos).sort((a,b)=>b.localeCompare(a));
+
+  function renderItem(d){
+    const isPg=d.status==='pago';
+    const isAt=d.status==='atrasado'||(d.data<td()&&d.status==='aberto');
+    return`<div class="dr ${isPg?'paga':isAt?'atrasada':''}" onclick="openM('det-dm','${d.id}')">
+      <div class="dr-ico" style="background:${CC[d.categoria]||'#94a3b8'}18"><span>${CI[d.categoria]||'📦'}</span></div>
+      <div class="dr-info">
+        <div class="dr-n">${d.nome}${d.parcelado?`<span class="pt" style="margin-left:6px">📦 ${d.parcela_atual}/${d.total_parcelas}</span>`:''}</div>
+        <div class="dr-m">${d.data} · ${d.categoria}</div>
+      </div>
+      <div class="dr-v">${fmt(d.valor)}</div>
+      <button class="sp ${isPg?'sp-pg':isAt?'sp-at':'sp-ab'}" onclick="event.stopPropagation();cycDm('${d.id}')" title="Clique para mudar status">${isPg?'✅ Pago':isAt?'⚠️ Atrasado':'○ Aberto'}</button>
+    </div>`;
+  }
+
+  const listaHTML=mesesOrdenados.map(mes=>{
+    const itens=grupos[mes];
+    const totalMes=itens.reduce((s,d)=>s+Number(d.valor),0);
+    const pagasMes=itens.filter(d=>d.status==='pago').length;
+    const atrasMes=itens.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
+    const [ano,m]=mes.split('-');
+    const nomeMes=mes==='sem-data'?'Sem data':`${MN[parseInt(m)-1]} ${ano}`;
+    const corHeader=atrasMes>0?'var(--rd)':pagasMes===itens.length?'var(--gd)':'var(--yd)';
+    return`
+    <div style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:${atrasMes>0?'var(--rl)':pagasMes===itens.length?'var(--gl)':'var(--yl)'};border-radius:10px;margin-bottom:8px;border-left:4px solid ${corHeader}">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:1rem;font-weight:800;color:${corHeader}">${nomeMes}</span>
+          <span style="font-size:.72rem;font-weight:700;color:${corHeader};opacity:.8">${itens.length} despesa(s)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          ${atrasMes>0?`<span style="font-size:.72rem;font-weight:700;color:var(--rd)">⚠️ ${atrasMes} atrasada(s)</span>`:''}
+          ${pagasMes>0?`<span style="font-size:.72rem;font-weight:700;color:var(--gd)">✅ ${pagasMes} paga(s)</span>`:''}
+          <span style="font-family:'Instrument Serif',serif;font-weight:800;color:${corHeader};font-size:1rem">${fmt(totalMes)}</span>
+        </div>
+      </div>
+      ${itens.map(renderItem).join('')}
+    </div>`;
+  }).join('');
+
+  return`<div class="ph"><div class="ph-t">Despesas do Mês</div><div class="ph-s">Agrupadas por mês · clique no status para alterar</div></div>
+  <div class="stats">
+    <div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">🧾</div><div class="sc-lbl">Total</div><div class="sc-v r">${fmt(tot)}</div></div>
+    <div class="sc"><div class="sc-ac" style="background:var(--g1)"></div><div class="sc-ico" style="background:var(--gl)">✅</div><div class="sc-lbl">Pagas</div><div class="sc-v g">${pagas}</div></div>
+    <div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">⚠️</div><div class="sc-lbl">Atrasadas</div><div class="sc-v r">${atras}</div></div>
+  </div>
+  <div class="sh">
+    <div class="filtros">
+      <button class="fb ${S.filtroDm==='todos'?'on':''}" onclick="setFDm('todos')">Todas</button>
+      <button class="fb ${S.filtroDm==='pago'?'on-g':''}" onclick="setFDm('pago')">✅ Pagas</button>
+      <button class="fb ${S.filtroDm==='aberto'?'on':''}" onclick="setFDm('aberto')">○ Abertas</button>
+      <button class="fb ${S.filtroDm==='atrasado'?'on-r':''}" onclick="setFDm('atrasado')">⚠️ Atrasadas</button>
+      <button class="fb ${S.sortDm==='val-desc'?'on':''}" onclick="setSortDm('val-desc')">↓ Valor</button>
+      <button class="fb ${S.sortDm==='val-asc'?'on':''}" onclick="setSortDm('val-asc')">↑ Valor</button>
+    </div>
+    <div style="display:flex;gap:7px">
+      <button class="btn btn-p btn-sm" onclick="openM('add-dm')">+ Normal</button>
+      <button class="btn btn-o btn-sm" onclick="openM('add-parc')">🛒 Parcelada</button>
+    </div>
+  </div>
+  ${listaHTML||'<p style="color:var(--t3);text-align:center;padding:20px;font-weight:600">Nenhuma despesa.</p>'}`;
 }
 function setFDm(f){S.filtroDm=f;render();}function setSortDm(s){S.sortDm=s;render();}
 async function cycDm(id){const cy={aberto:'pago',pago:'atrasado',atrasado:'aberto'};const d=S.dm.find(x=>x.id===id);if(!d||d.categoria==='Juros Dívida')return;d.status=cy[d.status||'aberto'];await sb.from('despesas_mes').update({status:d.status}).eq('id',id);render();}
