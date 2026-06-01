@@ -311,7 +311,8 @@ function toast(msg,t='ok'){
 
 async function loadAll(){
   try{
-    const [d,c,ca,dm,df,es]=await Promise.all([sb.from('dividas').select('*'),sb.from('creditos').select('*'),sb.from('cartoes').select('*'),sb.from('despesas_mes').select('*'),sb.from('despesas_fixas').select('*'),sb.from('estrategia').select('*').eq('id','main').single()]);
+    const [d,c,ca,dm,df]=await Promise.all([sb.from('dividas').select('*'),sb.from('creditos').select('*'),sb.from('cartoes').select('*'),sb.from('despesas_mes').select('*'),sb.from('despesas_fixas').select('*')]);
+    const es=await sb.from('estrategia').select('*').eq('id','main').maybeSingle();
     const ob=await sb.from('cal_obs').select('*').catch(()=>({data:[]}));
     S.dividas=(d.data||[]).map(x=>({...x,historico:x.historico||[],log:x.log||[]}));
     S.creditos=(c.data||[]).map(x=>({...x,log:x.log||[]}));
