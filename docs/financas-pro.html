@@ -311,7 +311,13 @@ function toast(msg,t='ok'){
 
 async function loadAll(){
   try{
-    const [d,c,ca,dm,df]=await Promise.all([sb.from('dividas').select('*'),sb.from('creditos').select('*'),sb.from('cartoes').select('*'),sb.from('despesas_mes').select('*'),sb.from('despesas_fixas').select('*')]);
+    const [d,c,ca,dm,df]=await Promise.all([
+      sb.from('dividas').select('*'),
+      sb.from('creditos').select('*'),
+      sb.from('cartoes').select('*'),
+      sb.from('despesas_mes').select('*'),
+      sb.from('despesas_fixas').select('*')
+    ]);
     const es=await sb.from('estrategia').select('*').eq('id','main').maybeSingle();
     const ob=await sb.from('cal_obs').select('*').catch(()=>({data:[]}));
     S.dividas=(d.data||[]).map(x=>({...x,historico:x.historico||[],log:x.log||[]}));
@@ -319,9 +325,15 @@ async function loadAll(){
     S.cartoes=(ca.data||[]).map(x=>({...x,saldoAtual:x.saldo_atual}));
     S.dm=(dm.data||[]).map(x=>({...x,historico:x.historico||[],status:x.status||'aberto'}));
     S.df=df.data||[];
-    if(es.data){S.est=es.data;S.re=Number(es.data.renda)||0;}
-    S.obs=ob.data||[];render();
-  }catch(e){toast('Erro ao carregar','err');render();}
+    if(es&&es.data){S.est=es.data;S.re=Number(es.data.renda)||0;}
+    else if(es&&!es.error){S.est={meta:50000,reserva:0,renda:0,notas:''};}
+    S.obs=ob.data||[];
+    render();
+  }catch(e){
+    console.error('Erro loadAll:',e);
+    toast('Erro ao carregar: '+e.message,'err');
+    render();
+  }
 }
 
 function calcJuros(d){if(!d.juros||!d.valor)return 0;return d.tipo_juros==='R$'?Number(d.juros):(Number(d.valor)*Number(d.juros))/100;}
