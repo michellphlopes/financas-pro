@@ -261,7 +261,14 @@ body{background:var(--bg);color:var(--tx);font-family:'Cabinet Grotesk',sans-ser
       <div class="sbi" onclick="go('proj')" id="ni-proj"><span class="sbico">📈</span>Projeções</div>
       <div class="sbi" onclick="go('analise')" id="ni-analise"><span class="sbico">🧠</span>Análise Inteligente</div>
     </nav>
-    <div class="sbfoot"><div class="sbuser"><div class="sbav">👤</div><div><div class="sbun">Minha Conta</div><div class="sbur">Administrador</div></div></div></div>
+    <div class="sbfoot">
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button onclick="exportBackup()" style="flex:1;padding:7px;border-radius:8px;border:1px solid rgba(0,200,150,.3);background:rgba(0,200,150,.1);color:#00c896;font-family:'Cabinet Grotesk',sans-serif;font-size:.75rem;font-weight:700;cursor:pointer">📥 Exportar</button>
+        <button onclick="document.getElementById('import-file').click()" style="flex:1;padding:7px;border-radius:8px;border:1px solid rgba(59,130,246,.3);background:rgba(59,130,246,.1);color:#60a5fa;font-family:'Cabinet Grotesk',sans-serif;font-size:.75rem;font-weight:700;cursor:pointer">📤 Importar</button>
+        <input type="file" id="import-file" accept=".json" style="display:none" onchange="importBackup(this)"/>
+      </div>
+      <div class="sbuser"><div class="sbav">👤</div><div><div class="sbun">Minha Conta</div><div class="sbur">Administrador</div></div></div>
+    </div>
   </aside>
   <main class="main">
     <header class="topbar"><div class="tbt" id="tbt">Dashboard</div><div class="tbd" id="tbd"></div></header>
@@ -692,6 +699,53 @@ function calcPrev(){
   const f=document.getElementById('fparc');if(!f)return;
   const val=Number(f.querySelector('[name=val]').value)||0;const atual=Number(f.querySelector('[name=atual]').value)||1;const total=Number(f.querySelector('[name=total]').value)||0;
   const prev=document.getElementById('parc-prev');if(val&&total&&prev){const restantes=total-atual+1;prev.style.display='block';prev.innerHTML=`🛒 Parcela ${atual}/${total} · Restam ${restantes}x de ${fmt(val)} · Total a pagar: <strong>${fmt(val*restantes)}</strong>`;}
+}
+
+async function exportBackup(){
+  try{
+    toast('Exportando...');
+    const backup={
+      versao:'1.0',data:new Date().toISOString(),
+      dividas:S.dividas,creditos:S.creditos,cartoes:S.cartoes,
+      dm:S.dm,df:S.df,est:S.est,obs:S.obs
+    };
+    const blob=new Blob([JSON.stringify(backup,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download=`financas-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();URL.revokeObjectURL(url);
+    toast('Backup exportado com sucesso!');
+  }catch(e){toast('Erro ao exportar','err');}
+}
+
+async function importBackup(input){
+  const file=input.files[0];if(!file)return;
+  if(!confirm('Isso vai SUBSTITUIR todos os dados atuais pelo backup. Confirma?')){input.value='';return;}
+  try{
+    toast('Importando backup...');
+    const text=await file.text();const bk=JSON.parse(text);
+    // Clear all tables
+    await Promise.all([
+      sb.from('dividas').delete().neq('id','__none__'),
+      sb.from('creditos').delete().neq('id','__none__'),
+      sb.from('cartoes').delete().neq('id','__none__'),
+      sb.from('despesas_mes').delete().neq('id','__none__'),
+      sb.from('despesas_fixas').delete().neq('id','__none__'),
+      sb.from('cal_obs').delete().neq('id','__none__'),
+    ]);
+    // Insert backup data in batches
+    const ins=async(table,rows)=>{if(rows&&rows.length>0){for(let i=0;i<rows.length;i+=50){await sb.from(table).insert(rows.slice(i,i+50));}}};
+    await ins('dividas',bk.dividas);
+    await ins('creditos',bk.creditos);
+    await ins('cartoes',bk.cartoes.map(c=>({...c,saldo_atual:c.saldo_atual||c.saldoAtual})));
+    await ins('despesas_mes',bk.dm);
+    await ins('despesas_fixas',bk.df);
+    await ins('cal_obs',bk.obs);
+    if(bk.est)await sb.from('estrategia').upsert({...bk.est,id:'main'});
+    input.value='';
+    toast('Backup importado! Recarregando...');
+    setTimeout(()=>loadAll(),1000);
+  }catch(e){toast('Erro ao importar: '+e.message,'err');input.value='';}
 }
 
 async function ensureDB(){
