@@ -736,14 +736,14 @@ async function remCart(id){await sb.from('cartoes').delete().eq('id',id);S.carto
 
 // ── DESPESAS MÊS ──────────────────────────────────────────────────────────────
 function rDm(){
-  // Estado de minimizados e meses visíveis
   if(!S.dmMinimized) S.dmMinimized={};
-  if(!S.dmMesesExtras) S.dmMesesExtras=0;
+  if(!S.dmMesesVisiveis) S.dmMesesVisiveis=new Set();
 
-  // Todos os itens sem filtro para calcular por mês
   const todos=[...S.dm];
+  const mesAtual=new Date().toISOString().slice(0,7);
+  const mesProx=(()=>{const d=new Date();d.setMonth(d.getMonth()+1);return d.toISOString().slice(0,7);})();
 
-  // Agrupar TODOS por mês para o painel de resumo
+  // Agrupar TODOS por mês
   const gruposTodos={};
   todos.forEach(d=>{
     const mes=d.data?d.data.slice(0,7):'sem-data';
@@ -751,28 +751,22 @@ function rDm(){
     gruposTodos[mes].push(d);
   });
 
-  // Meses com pendências para o topo (excluir meses 100% pagos)
+  // Meses com pendências para o painel do topo
   const mesesComPendencia=Object.entries(gruposTodos)
     .filter(([,itens])=>itens.some(d=>d.status!=='pago'))
     .sort(([a],[b])=>a.localeCompare(b));
 
-  // Meses para listar (mês atual + extras futuros + passados com pendência)
-  const mesAtual=new Date().toISOString().slice(0,7);
-  const mesesFuturos=[];
-  for(let i=1;i<=S.dmMesesExtras;i++){
-    const d=new Date(new Date().getFullYear(),new Date().getMonth()+i,1);
-    mesesFuturos.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
-  }
+  // Meses VISÍVEIS na lista: atrasados + atual + próximo + extras clicados
+  const mesesBase=new Set();
+  Object.keys(gruposTodos).filter(m=>m<mesAtual&&gruposTodos[m].some(d=>d.status!=='pago')).forEach(m=>mesesBase.add(m));
+  if(gruposTodos[mesAtual]) mesesBase.add(mesAtual);
+  if(gruposTodos[mesProx]) mesesBase.add(mesProx);
+  S.dmMesesVisiveis.forEach(m=>mesesBase.add(m));
 
-  // Montar lista de meses a exibir
-  const mesesSet=new Set([...Object.keys(gruposTodos),...mesesFuturos]);
-  let mesesOrdenados=[...mesesSet].sort((a,b)=>b.localeCompare(a));
-
-  // Aplicar filtro
-  let mesesFiltrados=mesesOrdenados;
-  if(S.filtroDm==='pago') mesesFiltrados=mesesOrdenados.filter(m=>gruposTodos[m]?.every(d=>d.status==='pago'));
-  if(S.filtroDm==='atrasado') mesesFiltrados=mesesOrdenados.filter(m=>gruposTodos[m]?.some(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')));
-  if(S.filtroDm==='aberto') mesesFiltrados=mesesOrdenados.filter(m=>gruposTodos[m]?.some(d=>d.status==='aberto'));
+  let mesesVisiveis=[...mesesBase].sort((a,b)=>b.localeCompare(a));
+  if(S.filtroDm==='pago') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.every(d=>d.status==='pago'));
+  if(S.filtroDm==='atrasado') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')));
+  if(S.filtroDm==='aberto') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>d.status==='aberto'));
 
   const tot=todos.reduce((s,d)=>s+Number(d.valor),0);
   const pagas=todos.filter(d=>d.status==='pago').length;
@@ -844,7 +838,7 @@ function rDm(){
     const pend=itens.filter(d=>d.status!=='pago').reduce((s,d)=>s+Number(d.valor),0);
     const atras=itens.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
     const [ano,m]=mes.split('-');
-    return`<div style="background:${bg};border-radius:10px;padding:11px 15px;border:1.5px solid ${atras>0?'rgba(255,61,90,.3)':'rgba(245,168,0,.3)'};cursor:pointer;min-width:130px" onclick="S.dmMinimized['${mes}']=false;render()">
+    return`<div style="background:${bg};border-radius:10px;padding:11px 15px;border:1.5px solid ${atras>0?'rgba(255,61,90,.3)':'rgba(245,168,0,.3)'};cursor:pointer;min-width:130px" onclick="if(!S.dmMesesVisiveis)S.dmMesesVisiveis=new Set();S.dmMesesVisiveis.add('${mes}');S.dmMinimized['${mes}']=false;render()">
       <div style="font-size:.78rem;font-weight:800;color:${cor}">${atras>0?'⚠️ ':''} ${MN[parseInt(m)-1]} ${ano}</div>
       <div style="font-family:'Instrument Serif',serif;font-size:1.05rem;font-weight:800;color:${cor};margin:3px 0">${fmt(pend)}</div>
       <div style="font-size:.68rem;color:var(--t3)">${itens.filter(d=>d.status!=='pago').length} pendente(s)</div>
@@ -882,19 +876,32 @@ function rDm(){
       <button class="fb ${S.sortDm==='val-asc'?'on':''}" onclick="setSortDm('val-asc')">↑ Valor</button>
     </div>
     <div style="display:flex;gap:7px;align-items:center">
-      <button class="btn btn-o btn-sm" onclick="S.dmMesesExtras=Math.max(0,(S.dmMesesExtras||0)-1);render()">◀</button>
-      <span style="font-size:.78rem;color:var(--t3);font-weight:600">Mês atual</span>
-      <button class="btn btn-o btn-sm" onclick="S.dmMesesExtras=(S.dmMesesExtras||0)+1;render()">▶ Próximo mês</button>
+      <button class="btn btn-o btn-sm" onclick="addMesVisivel(-1)">◀ Mês anterior</button>
+      <button class="btn btn-o btn-sm" onclick="addMesVisivel(1)">▶ Próximo mês</button>
       <button class="btn btn-p btn-sm" onclick="openM('add-dm')">+ Normal</button>
       <button class="btn btn-o btn-sm" onclick="openM('add-parc')">🛒 Parcelada</button>
     </div>
   </div>
-  ${mesesFiltrados.map(renderMes).join('')||'<p style="color:var(--t3);text-align:center;padding:20px;font-weight:600">Nenhuma despesa encontrada.</p>'}`;
+  ${mesesVisiveis.map(renderMes).join('')||'<p style="color:var(--t3);text-align:center;padding:20px;font-weight:600">Nenhuma despesa encontrada.</p>'}`;
 }
 
 function toggleMiniDm(mes){
   if(!S.dmMinimized)S.dmMinimized={};
   S.dmMinimized[mes]=!S.dmMinimized[mes];
+  render();
+}
+
+function addMesVisivel(offset){
+  if(!S.dmMesesVisiveis) S.dmMesesVisiveis=new Set();
+  // Encontra o mês mais futuro visível e adiciona o próximo
+  const visiveis=[...S.dmMesesVisiveis];
+  const mesAtual=new Date().toISOString().slice(0,7);
+  const mesProx=(()=>{const d=new Date();d.setMonth(d.getMonth()+1);return d.toISOString().slice(0,7);})();
+  const base=visiveis.length>0?visiveis.sort().pop():mesProx;
+  const [ano,mes]=base.split('-');
+  const d=new Date(parseInt(ano),parseInt(mes)-1+offset,1);
+  const novoMes=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  if(novoMes>mesProx) S.dmMesesVisiveis.add(novoMes);
   render();
 }
 // ── DESPESAS FIXAS ────────────────────────────────────────────────────────────
