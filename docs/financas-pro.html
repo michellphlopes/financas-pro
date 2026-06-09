@@ -331,6 +331,7 @@ async function loadAll(){
     if(es&&es.data){S.est=es.data;S.re=Number(es.data.renda)||0;}
     S.obs=ob.data||[];
     await syncFixas();
+    await syncParcelas();
     render();
   }catch(e){
     console.error('Erro loadAll:',e);
@@ -342,10 +343,52 @@ async function loadAll(){
 function calcJuros(d){if(!d.juros||!d.valor)return 0;return d.tipo_juros==='R$'?Number(d.juros):(Number(d.valor)*Number(d.juros))/100;}
 
 async function syncJuros(){
+  // Remove todos os lançamentos de juros existentes
   S.dm=S.dm.filter(d=>d.categoria!=='Juros Dívida');
   try{await sb.from('despesas_mes').delete().like('id','juros_%');}catch(e){}
+
+  const hoje=new Date();
+
   for(const div of S.dividas){
-    if(div.lancar_juros_despesa){const j=calcJuros(div);if(j>0){const r={id:'juros_'+div.id,nome:`Juros: ${div.nome}`,valor:j,categoria:'Juros Dívida',data:div.vencimento||td(),status:'aberto',historico:[]};await sb.from('despesas_mes').upsert(r);const i=S.dm.findIndex(x=>x.id===r.id);if(i>=0)S.dm[i]=r;else S.dm.push(r);}}
+    if(div.lancar_juros_despesa){
+      const j=calcJuros(div);
+      if(j<=0) continue;
+
+      // Extrai o dia do vencimento
+      let diaVenc=1;
+      if(div.vencimento){
+        const partes=div.vencimento.split('-');
+        if(partes.length===3) diaVenc=parseInt(partes[2])||1;
+      }
+
+      // Lança para mês atual e próximos 12 meses
+      for(let offset=0;offset<=12;offset++){
+        const d=new Date(hoje.getFullYear(),hoje.getMonth()+offset,1);
+        const ano=d.getFullYear();
+        const mes=String(d.getMonth()+1).padStart(2,'0');
+        // Garante que o dia não ultrapasse o último dia do mês
+        const ultimoDia=new Date(ano,d.getMonth()+1,0).getDate();
+        const dia=String(Math.min(diaVenc,ultimoDia)).padStart(2,'0');
+        const dataLanc=`${ano}-${mes}-${dia}`;
+        const id=`juros_${div.id}_${ano}_${mes}`;
+
+        // Só cria se não foi marcado como pago
+        const jaExiste=S.dm.find(x=>x.id===id);
+        if(jaExiste) continue;
+
+        const r={
+          id,
+          nome:`Juros: ${div.nome}`,
+          valor:j,
+          categoria:'Juros Dívida',
+          data:dataLanc,
+          status:dataLanc<td()?'atrasado':'aberto',
+          historico:[]
+        };
+        await sb.from('despesas_mes').upsert(r);
+        S.dm.push(r);
+      }
+    }
   }
 }
 
@@ -364,32 +407,59 @@ async function syncFixas(){
       const diaStr=String(fixa.dia).padStart(2,'0');
       const dataVenc=`${ano}-${mesStr}-${diaStr}`;
       const idFixa=`fixa_${fixa.id}_${ano}_${mesStr}`;
-
-      // Verifica se já existe lançamento para esse mês
       const jaExiste=S.dm.find(d=>d.id===idFixa);
       if(jaExiste) continue;
-
-      // Verifica se já foi pago manualmente (mesmo nome, mesmo mês)
-      const pagaManual=S.dm.find(d=>
-        d.nome===fixa.nome &&
-        d.data&&d.data.startsWith(`${ano}-${mesStr}`) &&
-        d.id!==idFixa
-      );
+      const pagaManual=S.dm.find(d=>d.nome===fixa.nome&&d.data&&d.data.startsWith(`${ano}-${mesStr}`)&&d.id!==idFixa);
       if(pagaManual) continue;
-
-      // Determina status: se data de vencimento já passou e não está pago = atrasado
       const status=dataVenc<td()?'atrasado':'aberto';
+      const r={id:idFixa,nome:fixa.nome,valor:fixa.valor,categoria:'Fixo',data:dataVenc,status,historico:[],parcelado:false,origem_fixa:fixa.id};
+      await sb.from('despesas_mes').upsert(r);
+      S.dm.push(r);
+    }
+  }
+}
+
+async function syncParcelas(){
+  // Gera lançamentos futuros automáticos para despesas parceladas
+  const hoje=new Date();
+  const parceladas=S.dm.filter(d=>d.parcelado&&d.parcela_atual&&d.total_parcelas);
+
+  for(const parc of parceladas){
+    const restantes=parc.total_parcelas-parc.parcela_atual;
+    if(restantes<=0) continue;
+
+    // Extrai o dia da data original da parcela
+    const dataBase=parc.data||td();
+    const [anoBase,mesBase,diaBase]=dataBase.split('-');
+    const dia=parseInt(diaBase)||1;
+
+    for(let offset=1;offset<=restantes;offset++){
+      const d=new Date(parseInt(anoBase),parseInt(mesBase)-1+offset,1);
+      const ano=d.getFullYear();
+      const mes=String(d.getMonth()+1).padStart(2,'0');
+      const ultimoDia=new Date(ano,d.getMonth()+1,0).getDate();
+      const diaFinal=String(Math.min(dia,ultimoDia)).padStart(2,'0');
+      const dataFutura=`${ano}-${mes}-${diaFinal}`;
+      const idFuturo=`parc_${parc.id}_${ano}_${mes}`;
+
+      // Não cria se já existe
+      const jaExiste=S.dm.find(x=>x.id===idFuturo);
+      if(jaExiste) continue;
 
       const r={
-        id:idFixa,
-        nome:fixa.nome,
-        valor:fixa.valor,
-        categoria:'Fixo',
-        data:dataVenc,
-        status,
+        id:idFuturo,
+        nome:parc.nome,
+        valor:parc.valor,
+        categoria:parc.categoria||'Parcelado',
+        data:dataFutura,
+        status:'aberto',
         historico:[],
-        parcelado:false,
-        origem_fixa:fixa.id
+        parcelado:true,
+        parcela_atual:parc.parcela_atual+offset,
+        total_parcelas:parc.total_parcelas,
+        total_pagar:parc.total_pagar,
+        atrasadas_qtd:0,
+        origem_parcela:parc.id
       };
       await sb.from('despesas_mes').upsert(r);
       S.dm.push(r);
