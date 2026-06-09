@@ -768,9 +768,12 @@ function rDm(){
   if(S.filtroDm==='atrasado') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')));
   if(S.filtroDm==='aberto') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>d.status==='aberto'));
 
-  const tot=todos.reduce((s,d)=>s+Number(d.valor),0);
-  const pagas=todos.filter(d=>d.status==='pago').length;
-  const atras=todos.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
+  // Stats apenas até o mês atual
+  const todosAteMesAtual=todos.filter(d=>d.data&&d.data.slice(0,7)<=mesAtual);
+  const tot=todosAteMesAtual.reduce((s,d)=>s+Number(d.valor),0);
+  const pagas=todosAteMesAtual.filter(d=>d.status==='pago').length;
+  const atras=todosAteMesAtual.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
+  const pendente=todosAteMesAtual.filter(d=>d.status!=='pago').reduce((s,d)=>s+Number(d.valor),0);
 
   function renderItem(d){
     const isPg=d.status==='pago';
@@ -861,9 +864,9 @@ function rDm(){
 
   return`<div class="ph"><div class="ph-t">Despesas do Mês</div><div class="ph-s">Agrupadas por mês · clique no cabeçalho para minimizar</div></div>
   <div class="stats">
-    <div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">🧾</div><div class="sc-lbl">Total</div><div class="sc-v r">${fmt(tot)}</div></div>
-    <div class="sc"><div class="sc-ac" style="background:var(--g1)"></div><div class="sc-ico" style="background:var(--gl)">✅</div><div class="sc-lbl">Pagas</div><div class="sc-v g">${pagas}</div></div>
-    <div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">⚠️</div><div class="sc-lbl">Atrasadas</div><div class="sc-v r">${atras}</div></div>
+    <div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">🧾</div><div class="sc-lbl">Total Geral</div><div class="sc-v r">${fmt(tot)}</div><div class="sc-sub">até mês atual</div></div>
+    <div class="sc"><div class="sc-ac" style="background:var(--g1)"></div><div class="sc-ico" style="background:var(--gl)">✅</div><div class="sc-lbl">Total Pago</div><div class="sc-v g">${fmt(todosAteMesAtual.filter(d=>d.status==='pago').reduce((s,d)=>s+Number(d.valor),0))}</div></div>
+    <div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">⏳</div><div class="sc-lbl">Total Pendente</div><div class="sc-v r">${fmt(pendente)}</div><div class="sc-sub">${atras} atrasada(s)</div></div>
   </div>
   ${painelPendencias}
   <div class="sh">
