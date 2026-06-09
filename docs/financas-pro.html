@@ -470,10 +470,14 @@ async function syncParcelas(){
 function parcelasMesOffset(offset){return S.dm.filter(d=>d.parcelado&&d.parcela_atual&&d.total_parcelas).reduce((s,d)=>s+(offset<=(d.total_parcelas-d.parcela_atual)?Number(d.valor):0),0);}
 
 function totalDividaReal(){
+  const mesAtual=new Date().toISOString().slice(0,7);
   const div=S.dividas.reduce((s,d)=>s+Number(d.valor),0);
-  const parc=S.dm.filter(d=>d.parcelado&&d.parcela_atual&&d.total_parcelas).reduce((s,d)=>s+(d.total_parcelas-d.parcela_atual+1)*Number(d.valor),0);
+  // Parcelas futuras: apenas dos registros originais (sem origem_parcela), conta parcelas restantes x valor
+  const parcOriginais=S.dm.filter(d=>d.parcelado&&d.parcela_atual&&d.total_parcelas&&!d.origem_parcela);
+  const parc=parcOriginais.reduce((s,d)=>s+(d.total_parcelas-d.parcela_atual)*Number(d.valor),0);
   const cart=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);
-  const dm=S.dm.filter(d=>d.status!=='pago'&&d.categoria!=='Juros Dívida'&&!d.parcelado).reduce((s,d)=>s+Number(d.valor),0);
+  // Despesas abertas: só mês atual, não parceladas
+  const dm=S.dm.filter(d=>d.status!=='pago'&&d.categoria!=='Juros Dívida'&&!d.parcelado&&d.data&&d.data.slice(0,7)===mesAtual).reduce((s,d)=>s+Number(d.valor),0);
   return{div,parc,cart,dm,total:div+parc+cart+dm};
 }
 
@@ -512,8 +516,9 @@ function initCharts(){
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function rDash(){
   const renda=S.re||Number(S.est.renda)||0;
+  const mesAtualDash=new Date().toISOString().slice(0,7);
   const tF=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);
-  const tM=S.dm.filter(d=>d.status!=='pago').reduce((s,d)=>s+Number(d.valor),0);
+  const tM=S.dm.filter(d=>d.status!=='pago'&&d.data&&d.data.slice(0,7)===mesAtualDash).reduce((s,d)=>s+Number(d.valor),0);
   const tFx=S.df.reduce((s,f)=>s+Number(f.valor),0);
   const saldo=renda-(tM+tFx+tF);
   const tJ=S.dividas.reduce((s,d)=>s+calcJuros(d),0);
@@ -920,7 +925,8 @@ async function remDf(id){await sb.from('despesas_fixas').delete().eq('id',id);S.
 
 // ── PROJEÇÕES ─────────────────────────────────────────────────────────────────
 function rProj(){
-  const renda=S.re||Number(S.est.renda)||0;const tD=S.dividas.reduce((s,d)=>s+Number(d.valor),0);const tJ=S.dividas.reduce((s,d)=>s+calcJuros(d),0);const tFx=S.df.reduce((s,f)=>s+Number(f.valor),0);const tM=S.dm.filter(d=>d.categoria!=='Juros Dívida').reduce((s,d)=>s+Number(d.valor),0);const tCa=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);const sobra=renda-(tFx+tM+tCa);let mq=0;{let cur=tD;for(let i=1;i<=120;i++){const j=tD>0?tJ*(cur/tD):0;const s2=renda-(tFx+tM+tCa+parcelasMesOffset(i));cur=Math.max(0,cur+j-Math.max(j,s2));if(cur<=0){mq=i;break;}if(i===120)mq=999;}}
+  const mesAtualP=new Date().toISOString().slice(0,7);
+  const renda=S.re||Number(S.est.renda)||0;const tD=S.dividas.reduce((s,d)=>s+Number(d.valor),0);const tJ=S.dividas.reduce((s,d)=>s+calcJuros(d),0);const tFx=S.df.reduce((s,f)=>s+Number(f.valor),0);const tM=S.dm.filter(d=>d.categoria!=='Juros Dívida'&&d.data&&d.data.slice(0,7)===mesAtualP).reduce((s,d)=>s+Number(d.valor),0);const tCa=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);const sobra=renda-(tFx+tM+tCa);let mq=0;{let cur=tD;for(let i=1;i<=120;i++){const j=tD>0?tJ*(cur/tD):0;const s2=renda-(tFx+tM+tCa+parcelasMesOffset(i));cur=Math.max(0,cur+j-Math.max(j,s2));if(cur<=0){mq=i;break;}if(i===120)mq=999;}}
   return`<div class="ph"><div class="ph-t">Projeções Financeiras</div><div class="ph-s">3 visões inteligentes sobre sua situação</div></div>
   <div class="pij"><label>💰 Simular renda:</label><input type="number" id="re-in" value="${renda}" oninput="updRe(this.value)" style="font-size:1.05rem;font-weight:800;color:var(--gd)"/></div>
   <div class="stats">
@@ -937,7 +943,8 @@ function rProj(){
 }
 
 function initProjC(){
-  const renda=S.re||Number(S.est.renda)||0;const tD=S.dividas.reduce((s,d)=>s+Number(d.valor),0);const tJ=S.dividas.reduce((s,d)=>s+calcJuros(d),0);const tFx=S.df.reduce((s,f)=>s+Number(f.valor),0);const tM=S.dm.filter(d=>d.categoria!=='Juros Dívida').reduce((s,d)=>s+Number(d.valor),0);const tCa=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);const sobra=renda-(tFx+tM+tCa);
+  const mesAtualPC=new Date().toISOString().slice(0,7);
+  const renda=S.re||Number(S.est.renda)||0;const tD=S.dividas.reduce((s,d)=>s+Number(d.valor),0);const tJ=S.dividas.reduce((s,d)=>s+calcJuros(d),0);const tFx=S.df.reduce((s,f)=>s+Number(f.valor),0);const tM=S.dm.filter(d=>d.categoria!=='Juros Dívida'&&d.data&&d.data.slice(0,7)===mesAtualPC).reduce((s,d)=>s+Number(d.valor),0);const tCa=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);const sobra=renda-(tFx+tM+tCa);
   const labels=[];for(let i=0;i<=24;i++){const m=new Date(now.getFullYear(),now.getMonth()+i,1);labels.push(MS[m.getMonth()]+'/'+(m.getFullYear()+'').slice(2));}
   // Gráfico 1: Queda saldo devedor
   const cq=document.getElementById('ch-quit');
@@ -952,7 +959,8 @@ function initProjC(){
 
 // ── ANÁLISE INTELIGENTE ───────────────────────────────────────────────────────
 function rAnalise(){
-  const renda=S.re||Number(S.est.renda)||0;const tD=S.dividas.reduce((s,d)=>s+Number(d.valor),0);const tJ=S.dividas.reduce((s,d)=>s+calcJuros(d),0);const tFx=S.df.reduce((s,f)=>s+Number(f.valor),0);const tM=S.dm.filter(d=>d.status!=='pago').reduce((s,d)=>s+Number(d.valor),0);const tCa=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);const tSa=tFx+tM+tCa;const sl=renda-tSa;const pct=renda>0?((tSa/renda)*100):0;const {total:totalReal}=totalDividaReal();const atras=S.dm.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto'));const lT=S.cartoes.reduce((s,c)=>s+Number(c.limite),0);const usoCart=lT>0?(tCa/lT)*100:0;const divMaisJuros=[...S.dividas].sort((a,b)=>calcJuros(b)-calcJuros(a));
+  const mesAtualA=new Date().toISOString().slice(0,7);
+  const renda=S.re||Number(S.est.renda)||0;const tD=S.dividas.reduce((s,d)=>s+Number(d.valor),0);const tJ=S.dividas.reduce((s,d)=>s+calcJuros(d),0);const tFx=S.df.reduce((s,f)=>s+Number(f.valor),0);const tM=S.dm.filter(d=>d.status!=='pago'&&d.data&&d.data.slice(0,7)===mesAtualA).reduce((s,d)=>s+Number(d.valor),0);const tCa=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);const tSa=tFx+tM+tCa;const sl=renda-tSa;const pct=renda>0?((tSa/renda)*100):0;const {total:totalReal}=totalDividaReal();const atras=S.dm.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto'));const lT=S.cartoes.reduce((s,c)=>s+Number(c.limite),0);const usoCart=lT>0?(tCa/lT)*100:0;const divMaisJuros=[...S.dividas].sort((a,b)=>calcJuros(b)-calcJuros(a));
   let score=100;if(pct>80)score-=25;else if(pct>70)score-=15;else if(pct>60)score-=8;if(tD>renda*6)score-=20;else if(tD>renda*3)score-=10;if(usoCart>80)score-=15;else if(usoCart>50)score-=8;if(atras.length>0)score-=15;if(tJ>renda*0.2)score-=15;else if(tJ>renda*0.1)score-=8;score=Math.max(0,score);
   const scoreCor=score>=70?'var(--gd)':score>=45?'var(--yd)':'var(--rd)';const scoreTxt=score>=70?'Saudável 💚':score>=45?'Atenção 🟡':'Crítico 🔴';
   const indicacoes=[];
