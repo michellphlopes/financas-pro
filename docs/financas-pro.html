@@ -966,6 +966,119 @@ ${iaHistory.length===0?`<div class="ia-sugs" id="ia-sugs">
 </div>`;
 }
 
+async function processarIALocal(texto,ctx){
+  const t=texto.toLowerCase().trim();
+  const renda=S.re||Number(S.est.renda)||0;
+  const tDiv=S.dividas.reduce((s,d)=>s+Number(d.valor),0);
+  const tJ=S.dividas.reduce((s,d)=>s+calcJuros(d),0);
+  const tFx=S.df.reduce((s,f)=>s+Number(f.valor),0);
+  const tM=S.dm.reduce((s,d)=>s+Number(d.valor),0);
+  const tCa=S.cartoes.reduce((s,c)=>s+Number(c.saldo_atual||0),0);
+  const tCred=S.creditos.filter(c=>c.status!=='recebido').reduce((s,c)=>s+Number(c.valor),0);
+  const saldo=renda-tFx-tM-tCa;
+  const pct=renda>0?((tFx+tM+tCa)/renda*100).toFixed(1):0;
+
+  // Detectar intenção de AÇÃO
+  // Adicionar despesa
+  const matchDesp=/(?:add|adicion|lança|coloca|registra|gastei|comprei|paguei despesa)[^\d]*(?:de\s+)?(?:uma?\s+)?(.+?)\s+(?:r\$\s*)?([\d.,]+)/i.exec(texto);
+  if(matchDesp||/nova despesa/i.test(t)){
+    if(matchDesp){
+      const nome=matchDesp[1].trim();const val=Number(matchDesp[2].replace(',','.'));
+      if(val>0){
+        return `Vou adicionar a despesa **${nome}** de **${fmt(val)}**.\n\`\`\`json\n{"acao":"ADD_DESPESA","dados":{"nome":"${nome}","valor":${val},"categoria":"Outros","data":"${td()}"}}\n\`\`\``;
+      }
+    }
+    return `Para adicionar uma despesa, diga: *"Adicionar despesa de [nome] R$ [valor]"*\n\nExemplo: *"Adicionar despesa de mercado R$ 350"*`;
+  }
+
+  // Pagar dívida
+  const matchPag=/(?:paguei|pagamento|pagar|quitar)\s+(?:r\$\s*)?([\d.,]+)?\s*(?:da\s+|do\s+|para\s+|de\s+)?(.+?)(?:\s+r\$\s*([\d.,]+))?$/i.exec(texto);
+  if(matchPag&&(t.includes('divid')||t.includes('paguei')||t.includes('pagamento'))){
+    const val=Number((matchPag[1]||matchPag[3]||'0').replace(',','.'));
+    const nomeBusca=(matchPag[2]||'').trim();
+    if(val>0&&nomeBusca){
+      const div=S.dividas.find(d=>d.nome.toLowerCase().includes(nomeBusca.toLowerCase()));
+      if(div) return `Registrando pagamento de **${fmt(val)}** na dívida **${div.nome}**.\n\`\`\`json\n{"acao":"PAGAR_DIVIDA","dados":{"nome":"${div.nome}","valor":${val},"obs":"Pagamento registrado"}}\n\`\`\``;
+    }
+    return `Para registrar pagamento de dívida, diga:\n*"Paguei R$ 500 da dívida do [nome]"*`;
+  }
+
+  // Marcar pago
+  if(/marcar?.*(pag|quit)|pag.*(despesa|conta|aluguel|luz|água|internet)/i.test(t)){
+    const palavras=t.replace(/marcar|como|pago|paga|despesa/g,'').trim().split(' ').filter(p=>p.length>2);
+    const desp=S.dm.find(d=>palavras.some(p=>d.nome.toLowerCase().includes(p)));
+    if(desp) return `Marcando **${desp.nome}** como pago.\n\`\`\`json\n{"acao":"MARCAR_PAGO","dados":{"nome":"${desp.nome}"}}\n\`\`\``;
+    return `Qual despesa você quer marcar como paga? Diga o nome completo.`;
+  }
+
+  // Atualizar renda
+  const matchRenda=/(?:minha\s+)?renda\s+(?:é|agora|nova|mudou|é de|passou a ser)?\s*(?:r\$\s*)?([\d.,]+)/i.exec(texto);
+  if(matchRenda){
+    const nr=Number(matchRenda[1].replace('.','').replace(',','.'));
+    if(nr>0) return `Atualizando sua renda para **${fmt(nr)}**.\n\`\`\`json\n{"acao":"UPDATE_RENDA","dados":{"renda":${nr}}}\n\`\`\``;
+  }
+
+  // Navegar
+  if(/ir para|abrir|mostrar|ver\s+(as\s+)?diví/i.test(t)) return `\`\`\`json\n{"acao":"NAVEGAR","dados":{"tela":"div"}}\n\`\`\``;
+  if(/ir para|abrir|ver\s+(as\s+)?despesas\s+do\s+mês/i.test(t)) return `\`\`\`json\n{"acao":"NAVEGAR","dados":{"tela":"dm"}}\n\`\`\``;
+  if(/ir para|abrir|ver\s+(as\s+)?fixas/i.test(t)) return `\`\`\`json\n{"acao":"NAVEGAR","dados":{"tela":"df"}}\n\`\`\``;
+  if(/dashboard|painel|início/i.test(t)) return `\`\`\`json\n{"acao":"NAVEGAR","dados":{"tela":"dash"}}\n\`\`\``;
+
+  // CONSULTAS
+
+  // Análise geral
+  if(/como estou|análise|situação|resumo|financ|geral|tudo/i.test(t)){
+    const divMaisJuros=[...S.dividas].sort((a,b)=>calcJuros(b)-calcJuros(a))[0];
+    return `**📊 Análise Financeira Completa**\n\n**Renda:** ${fmt(renda)}\n**Saídas:** ${fmt(tFx+tM+tCa)} (${pct}% da renda)\n**Saldo do mês:** ${fmt(saldo)} ${saldo>=0?'✅':'⚠️'}\n\n**Dívidas:** ${fmt(tDiv)} em ${S.dividas.length} dívida(s)\n**Juros mensais:** ${fmt(tJ)}\n**A receber:** ${fmt(tCred)}\n**Faturas cartões:** ${fmt(tCa)}\n\n${divMaisJuros&&calcJuros(divMaisJuros)>0?`⚠️ **Maior encargo:** ${divMaisJuros.nome} — ${fmt(calcJuros(divMaisJuros))}/mês\n\n`:''}${pct>70?'🚨 Comprometimento acima de 70% — revise os gastos.':saldo>0?'✅ Suas finanças estão equilibradas.':''}`;
+  }
+
+  // Dívidas
+  if(/divid|devo|deved|juros|encarg/i.test(t)){
+    if(S.dividas.length===0) return `Você não tem nenhuma dívida cadastrada. 🎉`;
+    const sorted=[...S.dividas].sort((a,b)=>calcJuros(b)-calcJuros(a));
+    return `**💸 Suas Dívidas**\n\nTotal: **${fmt(tDiv)}** | Juros/mês: **${fmt(tJ)}**\n\n${sorted.map((d,i)=>`${i+1}. **${d.nome}**: ${fmt(d.valor)} — ${d.juros||0}${d.tipo_juros||'%'} a.m. (${fmt(calcJuros(d))}/mês)`).join('\n')}\n\n${sorted[0]&&calcJuros(sorted[0])>0?`💡 Priorize quitar **${sorted[0].nome}** — maior custo mensal.`:''}`;
+  }
+
+  // Créditos
+  if(/crédit|receb|deve.*mim|me deve/i.test(t)){
+    if(S.creditos.length===0) return `Nenhum crédito cadastrado.`;
+    return `**💰 Créditos a Receber**\n\nTotal pendente: **${fmt(tCred)}**\n\n${S.creditos.map(c=>`- **${c.nome}**: ${fmt(c.valor)} — ${c.status}`).join('\n')}`;
+  }
+
+  // Vencimentos
+  if(/venciment|venc|prazo|quando/i.test(t)){
+    const d10=new Date();d10.setDate(d10.getDate()+10);const d10s=d10.toISOString().slice(0,10);
+    const prox=S.dividas.filter(d=>d.vencimento&&d.vencimento>=td()&&d.vencimento<=d10s);
+    if(prox.length===0) return `Nenhum vencimento de dívidas nos próximos 10 dias. ✅`;
+    return `**📅 Vencimentos nos próximos 10 dias:**\n\n${prox.map(d=>`- **${d.nome}**: vence em ${d.vencimento}`).join('\n')}`;
+  }
+
+  // Cartões
+  if(/cartão|cartoes|fatura|limite/i.test(t)){
+    if(S.cartoes.length===0) return `Nenhum cartão cadastrado.`;
+    return `**💳 Seus Cartões**\n\n${S.cartoes.map(c=>{const uso=(Number(c.saldo_atual||0)/c.limite*100).toFixed(0);return`- **${c.nome}**: Fatura ${fmt(c.saldo_atual||0)} / Limite ${fmt(c.limite)} (${uso}% usado) — vcto dia ${c.vencimento}`;}).join('\n')}`;
+  }
+
+  // Saldo / sobra
+  if(/saldo|sobra|disponível|sobr/i.test(t)){
+    return `**💰 Saldo do Mês**\n\nRenda: ${fmt(renda)}\nFixas: -${fmt(tFx)}\nDespesas: -${fmt(tM)}\nCartões: -${fmt(tCa)}\n\n**Saldo disponível: ${fmt(saldo)}** ${saldo>=0?'✅':'⚠️ Negativo!'}`;
+  }
+
+  // Despesas fixas
+  if(/fix|aluguel|mensalidade/i.test(t)){
+    if(S.df.length===0) return `Nenhuma despesa fixa cadastrada.`;
+    return `**📌 Despesas Fixas** — Total: ${fmt(tFx)}/mês\n\n${S.df.sort((a,b)=>a.dia-b.dia).map(f=>`- **${f.nome}**: ${fmt(f.valor)} — dia ${f.dia}`).join('\n')}`;
+  }
+
+  // Ajuda
+  if(/ajuda|help|o que|pode|conseg|como usar/i.test(t)){
+    return `**🤖 O que posso fazer por você:**\n\n**📊 Consultas:**\n- "Como estão minhas finanças?"\n- "Minhas dívidas e juros"\n- "Tenho vencimentos essa semana?"\n- "Quanto tenho a receber?"\n- "Meu saldo do mês"\n\n**✏️ Ações:**\n- "Adicionar despesa de [nome] R$ [valor]"\n- "Paguei R$ 500 da dívida do [nome]"\n- "Marcar [despesa] como pago"\n- "Minha renda agora é R$ [valor]"\n\n**🧭 Navegar:**\n- "Ir para dívidas / despesas / fixas / dashboard"`;
+  }
+
+  // Resposta padrão inteligente
+  return `Entendi sua pergunta sobre **"${texto}"**.\n\nAqui está um resumo rápido da sua situação:\n• Renda: ${fmt(renda)} | Saldo: ${fmt(saldo)}\n• Dívidas: ${fmt(tDiv)} | Juros: ${fmt(tJ)}/mês\n• A receber: ${fmt(tCred)}\n\nPosso ajudar com consultas, lançamentos e pagamentos. Digite **"ajuda"** para ver tudo que posso fazer!`;
+}
+
 async function sendIA(msg){
   const inp=document.getElementById('ia-inp');
   const text=(msg||(inp?inp.value.trim():'')).trim();
@@ -982,18 +1095,9 @@ async function sendIA(msg){
   const btn=document.getElementById('ia-btn');if(btn)btn.disabled=true;
 
   try{
-    const response=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        system:buildContext(),
-        messages:iaHistory.filter(m=>m.role==='user'||m.role==='assistant').map(m=>({role:m.role,content:m.content}))
-      })
-    });
-    const data=await response.json();
-    const reply=data.content?.[0]?.text||'Desculpe, não consegui processar.';
+    // IA local baseada nos dados reais do sistema
+    const reply=await processarIALocal(text,buildContext());
+    const data={content:[{text:reply}]};
     document.getElementById('ia-typing')?.remove();
 
     // Execute action if present
@@ -1086,6 +1190,9 @@ function copiarParaGH(){
     status.textContent='⚠️ Não foi possível copiar automaticamente. Selecione o texto e copie manualmente.';
   });
 }
+
+function openM(t,d){S.modal=t;S.mdata=d;render();}
+function closeM(){S.modal=null;S.mdata=null;const m=document.getElementById('mwrap');if(m)m.remove();}
 
 function buildModal(){
   const CATS=['Alimentação','Moradia','Transporte','Saúde','Lazer','Educação','Outros'];
