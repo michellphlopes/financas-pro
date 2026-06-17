@@ -442,6 +442,8 @@ async function syncParcelas(){
     const dataBase=parc.data||td();
     const [anoBase,mesBase,diaBase]=dataBase.split('-');
     const dia=parseInt(diaBase)||1;
+    // Usa ID base sem prefixo parc_ para evitar duplicação
+    const baseId=parc.id.startsWith('parc_')?parc.id.slice(5):parc.id;
     for(let offset=1;offset<=restantes;offset++){
       const d=new Date(parseInt(anoBase),parseInt(mesBase)-1+offset,1);
       const ano=d.getFullYear();
@@ -449,7 +451,7 @@ async function syncParcelas(){
       const ultimoDia=new Date(ano,d.getMonth()+1,0).getDate();
       const diaFinal=String(Math.min(dia,ultimoDia)).padStart(2,'0');
       const dataFutura=ano+'-'+mes+'-'+diaFinal;
-      const idFuturo='parc_'+parc.id+'_'+ano+'_'+mes;
+      const idFuturo='parc_'+baseId+'_'+ano+'_'+mes;
       if(S.dm.find(x=>x.id===idFuturo)) continue;
       const r={id:idFuturo,nome:parc.nome,valor:parc.valor,categoria:parc.categoria||'Parcelado',data:dataFutura,status:'aberto',historico:[],parcelado:true,parcela_atual:parc.parcela_atual+offset,total_parcelas:parc.total_parcelas,total_pagar:parc.total_pagar,atrasadas_qtd:0,origem_parcela:parc.id};
       novos.push(r);
