@@ -335,7 +335,7 @@ async function loadAll(){
       sb.from('dividas').select('*'),
       sb.from('creditos').select('*'),
       sb.from('cartoes').select('*'),
-      sb.from('despesas_mes').select('*'),
+      sb.from('despesas_mes').select('*').range(0,2000),
       sb.from('despesas_fixas').select('*'),
       sb.from('estrategia').select('*').eq('id','main').maybeSingle(),
       sb.from('cal_obs').select('*')
