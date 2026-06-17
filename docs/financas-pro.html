@@ -1715,10 +1715,13 @@ async function cycDm(id){
   const d=S.dm.find(x=>x.id===id);
   if(!d) return;
   const novoStatus=d.status==='pago'?(d.data<td()?'atrasado':'aberto'):'pago';
-  const{error}=await sb.from('despesas_mes').update({status:novoStatus}).eq('id',id);
+  const{data,error}=await sb.from('despesas_mes').update({status:novoStatus}).eq('id',id).select();
   if(error){
-    toast('Erro ao salvar: '+error.message,'err');
-    console.error('cycDm error:',error);
+    alert('Erro ao salvar: '+JSON.stringify(error));
+    return;
+  }
+  if(!data||data.length===0){
+    alert('UPDATE não afetou nenhuma linha! ID: '+id);
     return;
   }
   d.status=novoStatus;
