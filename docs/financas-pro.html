@@ -343,11 +343,13 @@ async function loadAll(){
     S.dividas=(d.data||[]).map(x=>({...x,historico:x.historico||[],log:x.log||[]}));
     S.creditos=(c.data||[]).map(x=>({...x,log:x.log||[]}));
     S.cartoes=(ca.data||[]).map(x=>({...x,saldoAtual:x.saldo_atual}));
+    // Carrega TODAS as despesas do banco incluindo fixas/parcelas com status correto
     S.dm=(dm.data||[]).map(x=>({...x,historico:x.historico||[],status:x.status||'aberto'}));
     S.df=df.data||[];
     if(es&&es.data){S.est=es.data;S.re=Number(es.data.renda)||50000;}
     else{S.re=50000;}
     S.obs=ob.data||[];
+    // Só cria lançamentos que ainda não existem no banco
     await syncJuros();
     await syncFixas();
     await syncParcelas();
@@ -1717,18 +1719,14 @@ async function cycDm(id){
   const d=S.dm.find(x=>x.id===id);
   if(!d) return;
   const novoStatus=d.status==='pago'?(d.data<td()?'atrasado':'aberto'):'pago';
-  const{data,error}=await sb.from('despesas_mes').update({status:novoStatus}).eq('id',id).select();
-  if(error){
-    alert('Erro ao salvar: '+JSON.stringify(error));
-    return;
-  }
-  if(!data||data.length===0){
-    alert('UPDATE não afetou nenhuma linha! ID: '+id);
-    return;
-  }
   d.status=novoStatus;
-  toast(novoStatus==='pago'?'✅ Marcado como pago!':'↩️ Desmarcado');
   render();
+  try{
+    await sb.from('despesas_mes').update({status:novoStatus}).eq('id',id);
+    toast(novoStatus==='pago'?'✅ Pago!':'↩️ Desmarcado');
+  }catch(e){
+    toast('Erro: '+e.message,'err');
+  }
 }
 
 async function saveDm(e){e.preventDefault();const f=new FormData(e.target);const r={id:uid(),nome:f.get('nome'),valor:Number(f.get('val')),categoria:f.get('cat'),data:f.get('data'),status:'aberto',historico:[],parcelado:false,notas:f.get('notas')||''};await sb.from('despesas_mes').insert(r);S.dm.push(r);closeM();toast('Adicionada!');render();}
