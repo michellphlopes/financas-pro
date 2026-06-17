@@ -145,6 +145,17 @@ body{background:var(--bg);color:var(--tx);font-family:'Cabinet Grotesk',sans-ser
 .fb.on-r{background:var(--rl);color:var(--rd);border-color:var(--rd)}
 .sp{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:100px;font-size:.72rem;font-weight:800;cursor:pointer;border:none;font-family:'Cabinet Grotesk',sans-serif;transition:all .2s}
 .sp-ab{background:var(--s3);color:var(--t3)}.sp-pg{background:var(--gl);color:var(--gd)}.sp-at{background:var(--rl);color:var(--rd)}
+/* Toggle iOS */
+.ios-toggle{position:relative;display:inline-flex;align-items:center;cursor:pointer;gap:8px;user-select:none}
+.ios-track{width:51px;height:31px;border-radius:100px;transition:background .3s;flex-shrink:0;position:relative}
+.ios-track.off{background:#e0e0e0}
+.ios-track.on{background:#34c759}
+.ios-track.at{background:#ff3b30}
+.ios-thumb{position:absolute;top:3px;width:25px;height:25px;background:#fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.2);transition:transform .3s cubic-bezier(.34,1.56,.64,1)}
+.ios-thumb.off{transform:translateX(3px)}
+.ios-thumb.on{transform:translateX(23px)}
+.ios-thumb.at{transform:translateX(3px)}
+.ios-lbl{font-size:.78rem;font-weight:700;min-width:54px}
 .pt{display:inline-flex;align-items:center;gap:4px;background:var(--pll);color:var(--pu);font-size:.72rem;font-weight:800;padding:3px 8px;border-radius:6px;margin-top:3px}
 .jb{display:inline-flex;align-items:center;gap:4px;background:var(--rl);color:var(--rd);font-size:.72rem;font-weight:800;padding:3px 8px;border-radius:6px;margin-top:3px}
 /* CALENDAR */
@@ -783,7 +794,9 @@ function rDm(){
   function renderItem(d){
     const isPg=d.status==='pago';
     const isAt=d.status==='atrasado'||(d.data<td()&&d.status==='aberto');
-    const sort=S.sortDm;
+    const trk=isPg?'on':isAt?'at':'off';
+    const lbl=isPg?'Pago':isAt?'Atrasado':'Aberto';
+    const lblCor=isPg?'var(--gd)':isAt?'var(--rd)':'var(--t3)';
     return`<div class="dr ${isPg?'paga':isAt?'atrasada':''}" onclick="openM('det-dm','${d.id}')">
       <div class="dr-ico" style="background:${CC[d.categoria]||'#94a3b8'}18"><span>${CI[d.categoria]||'📦'}</span></div>
       <div class="dr-info">
@@ -791,7 +804,10 @@ function rDm(){
         <div class="dr-m">${d.data} · ${d.categoria}</div>
       </div>
       <div class="dr-v">${fmt(d.valor)}</div>
-      <button class="sp ${isPg?'sp-pg':isAt?'sp-at':'sp-ab'}" onclick="event.stopPropagation();cycDm('${d.id}')" title="Mudar status">${isPg?'✅ Pago':isAt?'⚠️ Atrasado':'○ Aberto'}</button>
+      <label class="ios-toggle" onclick="event.stopPropagation();cycDm('${d.id}')" title="Marcar como pago">
+        <div class="ios-track ${trk}"><div class="ios-thumb ${trk}"></div></div>
+        <span class="ios-lbl" style="color:${lblCor}">${lbl}</span>
+      </label>
     </div>`;
   }
 
@@ -1295,6 +1311,27 @@ function copiarParaGH(){
     status.textContent='⚠️ Não foi possível copiar automaticamente. Selecione o texto e copie manualmente.';
   });
 }
+
+function setFDm(f){S.filtroDm=f;render();}
+function setSortDm(s){S.sortDm=s;render();}
+
+async function cycDm(id){
+  const d=S.dm.find(x=>x.id===id);
+  if(!d||d.categoria==='Juros Dívida') return;
+  if(d.status==='pago'){
+    d.status=d.data<td()?'atrasado':'aberto';
+  } else {
+    d.status='pago';
+  }
+  await sb.from('despesas_mes').update({status:d.status}).eq('id',id);
+  render();
+}
+
+async function saveDm(e){e.preventDefault();const f=new FormData(e.target);const r={id:uid(),nome:f.get('nome'),valor:Number(f.get('val')),categoria:f.get('cat'),data:f.get('data'),status:'aberto',historico:[],parcelado:false};await sb.from('despesas_mes').insert(r);S.dm.push(r);closeM();toast('Adicionada!');render();}
+async function saveParc(e){e.preventDefault();const f=new FormData(e.target);const tp=Number(f.get('total')),pa=Number(f.get('atual')),val=Number(f.get('val')),at=Number(f.get('atrasadas')||0);const r={id:uid(),nome:f.get('nome'),valor:val,categoria:'Parcelado',data:f.get('data'),status:at>0?'atrasado':'aberto',historico:[],parcelado:true,parcela_atual:pa,total_parcelas:tp,total_pagar:val*(tp-pa+1),atrasadas_qtd:at};await sb.from('despesas_mes').insert(r);S.dm.push(r);closeM();toast(`Parcelado! Total: ${fmt(r.total_pagar)}`);render();}
+async function editDm(e){e.preventDefault();const f=new FormData(e.target);const id=S.mdata;const d=S.dm.find(x=>x.id===id);const nh=[...(d.historico||[]),{data:td(),obs:'Editado: '+(f.get('obs')||''),de:d.nome+'/'+d.valor,para:f.get('nome')+'/'+f.get('val')}];const upd={nome:f.get('nome'),valor:Number(f.get('val')),categoria:f.get('cat'),data:f.get('data'),historico:nh};await sb.from('despesas_mes').update(upd).eq('id',id);Object.assign(d,upd);closeM();toast('Atualizado!');render();}
+async function lancDm(e){e.preventDefault();const f=new FormData(e.target);const id=S.mdata;const d=S.dm.find(x=>x.id===id);const nh=[...(d.historico||[]),{data:f.get('data'),obs:f.get('obs'),valor:Number(f.get('val'))}];await sb.from('despesas_mes').update({historico:nh}).eq('id',id);d.historico=nh;closeM();toast('Lançado!');render();}
+async function remDm(id){await sb.from('despesas_mes').delete().eq('id',id);S.dm=S.dm.filter(d=>d.id!==id);toast('Removido.');render();}
 
 function openM(t,d){S.modal=t;S.mdata=d;render();}
 function closeM(){S.modal=null;S.mdata=null;const m=document.getElementById('mwrap');if(m)m.remove();}
