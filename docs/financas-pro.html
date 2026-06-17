@@ -294,8 +294,15 @@ const SK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6I
 const sb=supabase.createClient(SU,SK);
 function doLogin(){
   const p=document.getElementById('lpwd').value;
-  if(p===atob('TGVvbzIwMjYq')){document.getElementById('ls').style.display='none';document.getElementById('app').classList.add('on');sessionStorage.setItem('fp','1');loadAll();}
-  else document.getElementById('lerr').style.display='block';
+  const correta='Leoo2026*';
+  if(p===correta){
+    document.getElementById('ls').style.display='none';
+    document.getElementById('app').classList.add('on');
+    sessionStorage.setItem('fp','1');
+    loadAll();
+  }else{
+    document.getElementById('lerr').style.display='block';
+  }
 }
 if(sessionStorage.getItem('fp')==='1'){document.getElementById('ls').style.display='none';document.getElementById('app').classList.add('on');}
 const MN=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
