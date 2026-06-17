@@ -1713,13 +1713,16 @@ function setSortDm(s){S.sortDm=s;render();}
 
 async function cycDm(id){
   const d=S.dm.find(x=>x.id===id);
-  if(!d||d.categoria==='Juros Dívida') return;
-  if(d.status==='pago'){
-    d.status=d.data<td()?'atrasado':'aberto';
-  } else {
-    d.status='pago';
+  if(!d) return;
+  const novoStatus=d.status==='pago'?(d.data<td()?'atrasado':'aberto'):'pago';
+  const{error}=await sb.from('despesas_mes').update({status:novoStatus}).eq('id',id);
+  if(error){
+    toast('Erro ao salvar: '+error.message,'err');
+    console.error('cycDm error:',error);
+    return;
   }
-  await sb.from('despesas_mes').update({status:d.status}).eq('id',id);
+  d.status=novoStatus;
+  toast(novoStatus==='pago'?'✅ Marcado como pago!':'↩️ Desmarcado');
   render();
 }
 
