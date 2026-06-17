@@ -349,11 +349,11 @@ async function loadAll(){
     if(es&&es.data){S.est=es.data;S.re=Number(es.data.renda)||50000;}
     else{S.re=50000;}
     S.obs=ob.data||[];
-    // Só cria lançamentos que ainda não existem no banco
-    await syncJuros();
-    await syncFixas();
-    await syncParcelas();
     render();
+    // Sync roda em background sem bloquear nem corromper dados
+    syncJuros().catch(e=>console.warn('syncJuros:',e));
+    syncFixas().catch(e=>console.warn('syncFixas:',e));
+    syncParcelas().catch(e=>console.warn('syncParcelas:',e));
     checkBackupReminder();
     checkVencimentos3dias();
   }catch(e){
@@ -367,21 +367,18 @@ function calcJuros(d){if(!d.juros||!d.valor)return 0;return d.tipo_juros==='R$'?
 
 async function syncJuros(){
   const hoje=new Date();
-  const todayStr=new Date().toISOString().slice(0,10);
-  const jurosNaoPagos=S.dm.filter(d=>d.categoria==='Juros Dívida'&&d.status!=='pago').map(d=>d.id);
-  S.dm=S.dm.filter(d=>!(d.categoria==='Juros Dívida'&&d.status!=='pago'));
-  if(jurosNaoPagos.length>0){
-    for(let i=0;i<jurosNaoPagos.length;i+=50){
-      try{await sb.from('despesas_mes').delete().in('id',jurosNaoPagos.slice(i,i+50));}catch(e){}
-    }
-  }
+  const todayStr=hoje.toISOString().slice(0,10);
   const novos=[];
+
   for(const div of S.dividas){
     if(!div.lancar_juros_despesa) continue;
     const j=calcJuros(div);
     if(j<=0) continue;
     let diaVenc=1;
-    if(div.vencimento){const partes=div.vencimento.split('-');if(partes.length===3)diaVenc=parseInt(partes[2])||1;}
+    if(div.vencimento){
+      const p=div.vencimento.split('-');
+      if(p.length===3) diaVenc=parseInt(p[2])||1;
+    }
     for(let offset=0;offset<=12;offset++){
       const d=new Date(hoje.getFullYear(),hoje.getMonth()+offset,1);
       const ano=d.getFullYear();
@@ -390,25 +387,26 @@ async function syncJuros(){
       const dia=String(Math.min(diaVenc,ultimoDia)).padStart(2,'0');
       const dataLanc=ano+'-'+mes+'-'+dia;
       const id='juros_'+div.id+'_'+ano+'_'+mes;
-      const jaExiste=S.dm.find(x=>x.id===id);
-      if(jaExiste&&jaExiste.status==='pago') continue;
+      // Nunca sobrescreve existente
+      if(S.dm.find(x=>x.id===id)) continue;
       const r={id,nome:'Juros: '+div.nome,valor:j,categoria:'Juros Dívida',data:dataLanc,status:dataLanc<todayStr?'atrasado':'aberto',historico:[]};
       novos.push(r);
-      const idx=S.dm.findIndex(x=>x.id===id);
-      if(idx>=0) S.dm[idx]=r; else S.dm.push(r);
+      S.dm.push(r);
     }
   }
+
   if(novos.length>0){
-    // Verifica quais IDs já existem antes de inserir para não sobrescrever status pago
     const ids=novos.map(r=>r.id);
     const {data:exist}=await sb.from('despesas_mes').select('id').in('id',ids);
     const existSet=new Set((exist||[]).map(x=>x.id));
-    const reaisNovos=novos.filter(r=>!existSet.has(r.id));
-    for(let i=0;i<reaisNovos.length;i+=50){
-      await sb.from('despesas_mes').insert(reaisNovos.slice(i,i+50));
+    const reais=novos.filter(r=>!existSet.has(r.id));
+    for(let i=0;i<reais.length;i+=50){
+      await sb.from('despesas_mes').insert(reais.slice(i,i+50));
     }
   }
 }
+
+
 async function syncFixas(){
   const hoje=new Date();
   const meses=[];
