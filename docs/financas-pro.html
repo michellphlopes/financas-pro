@@ -345,6 +345,8 @@ async function loadAll(){
     await syncFixas();
     await syncParcelas();
     render();
+    checkBackupReminder();
+    checkVencimentos3dias();
   }catch(e){
     console.error('Erro loadAll:',e);
     toast('Erro: '+e.message,'err');
@@ -404,10 +406,10 @@ async function syncJuros(){
 
 
 async function syncFixas(){
-  // Gera lançamentos automáticos das despesas fixas nos últimos 3 meses + mês atual
   const hoje=new Date();
   const meses=[];
-  for(let i=2;i>=0;i--){
+  // Últimos 3 meses + mês atual + próximos 12 meses = 16 meses total
+  for(let i=3;i>=-12;i--){
     const d=new Date(hoje.getFullYear(),hoje.getMonth()-i,1);
     meses.push({ano:d.getFullYear(),mes:d.getMonth()+1});
   }
@@ -415,7 +417,9 @@ async function syncFixas(){
   for(const fixa of S.df){
     for(const {ano,mes} of meses){
       const mesStr=String(mes).padStart(2,'0');
-      const diaStr=String(fixa.dia).padStart(2,'0');
+      const ultimoDia=new Date(ano,mes,0).getDate();
+      const dia=Math.min(fixa.dia,ultimoDia);
+      const diaStr=String(dia).padStart(2,'0');
       const dataVenc=`${ano}-${mesStr}-${diaStr}`;
       const idFixa=`fixa_${fixa.id}_${ano}_${mesStr}`;
       const jaExiste=S.dm.find(d=>d.id===idFixa);
@@ -522,6 +526,7 @@ function render(){
 function initCharts(){
   Chart.defaults.font.family='Cabinet Grotesk';Chart.defaults.color='#5a6a85';
   if(S.tab==='dash')initDashC();if(S.tab==='proj')initProjC();if(S.tab==='analise')initAnalC();
+  if(S.tab==='dash'){initGastosChart();}
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -589,6 +594,37 @@ function rDash(){
       <div class="cw" style="height:210px"><canvas id="ch-divev"></canvas></div>
       ${tDiv>0?`<div class="prog" style="margin-top:11px"><div class="prog-lbl"><span>Estimativa de progresso</span><span>${fmt(tDiv)} restante</span></div><div class="prog-bg"><div class="prog-fill" style="width:${mesesQuit>0&&mesesQuit<999?Math.min(100,Math.round((1/mesesQuit)*200)):0}%;background:var(--g1)"></div></div></div>`:''}
     </div>
+  </div>
+
+  <div class="cc" style="margin-top:14px">
+    <div class="cch">
+      <div><div class="cct">📊 Evolução de Gastos por Mês</div><div class="ccs">Total gasto vs pendente nos últimos 6 meses</div></div>
+    </div>
+    <div class="cw" style="height:200px"><canvas id="ch-gastos"></canvas></div>
+  </div>
+
+  <div class="card" style="margin-top:14px;border-left:4px solid var(--bl)">
+    <div class="sh" style="margin-bottom:12px">
+      <div class="sh-t">🎯 Meta Mensal de Gastos</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:.78rem;font-weight:700;color:var(--t3)">Meta:</span>
+        <input type="number" id="meta-input" value="${S.metaMensal||renda*0.7|0}" oninput="S.metaMensal=Number(this.value);render()" style="width:120px;background:var(--s2);border:1.5px solid var(--bd);border-radius:8px;padding:5px 10px;font-family:'Cabinet Grotesk',sans-serif;font-size:.9rem;font-weight:700;color:var(--tx);outline:none"/>
+      </div>
+    </div>
+    ${(()=>{
+      const meta=S.metaMensal||Math.round(renda*0.7);
+      const gasto=tM+tFx+tF;
+      const pct=meta>0?Math.min(100,(gasto/meta)*100):0;
+      const over=gasto>meta;
+      const cor=over?'var(--g2)':pct>80?'linear-gradient(90deg,var(--yw),var(--or))':'var(--g1)';
+      return \`<div style="display:flex;justify-content:space-between;font-size:.78rem;font-weight:700;margin-bottom:8px">
+        <span style="color:var(--t3)">Gasto: <strong style="color:\${over?'var(--rd)':'var(--tx)'}">\${fmt(gasto)}</strong></span>
+        <span style="color:var(--t3)">Meta: <strong>\${fmt(meta)}</strong></span>
+        <span style="color:\${over?'var(--rd)':'var(--gd)'}">\${pct.toFixed(1)}%</span>
+      </div>
+      <div class="prog-bg" style="height:12px;border-radius:100px"><div class="prog-fill" style="width:\${pct}%;background:\${cor}"></div></div>
+      \${over?\`<div style="margin-top:8px;font-size:.8rem;font-weight:700;color:var(--rd)">⚠️ Meta ultrapassada em \${fmt(gasto-meta)}</div>\`:\`<div style="margin-top:8px;font-size:.8rem;font-weight:700;color:var(--gd)">✅ \${fmt(meta-gasto)} disponível dentro da meta</div>\`}\`;
+    })()}
   </div>`;
 }
 
@@ -637,6 +673,45 @@ function initDashC(){
   }
 }
 function updRe(v){S.re=Number(v)||0;clearTimeout(S._rt2);S._rt2=setTimeout(()=>render(),500);}
+
+// Melhoria 2: Notificações de vencimentos em 3 dias
+function checkVencimentos3dias(){
+  const d3=new Date();d3.setDate(d3.getDate()+3);const d3s=d3.toISOString().slice(0,10);
+  const urgentes=[];
+  S.dividas.forEach(d=>{if(d.vencimento&&d.vencimento>=td()&&d.vencimento<=d3s)urgentes.push({nome:d.nome,data:d.vencimento,valor:d.valor,tipo:'Dívida'});});
+  S.dm.filter(d=>d.status!=='pago').forEach(d=>{if(d.data>=td()&&d.data<=d3s)urgentes.push({nome:d.nome,data:d.data,valor:d.valor,tipo:'Despesa'});});
+  if(urgentes.length===0)return;
+  const already=sessionStorage.getItem('fp_notif_shown');
+  if(already===td())return;
+  sessionStorage.setItem('fp_notif_shown',td());
+  setTimeout(()=>{
+    const el=document.createElement('div');
+    el.style.cssText='position:fixed;top:70px;right:24px;background:#fff;border:1.5px solid rgba(255,61,90,.3);border-radius:14px;padding:16px 18px;z-index:9998;box-shadow:0 8px 32px rgba(0,0,0,.15);max-width:300px;animation:mIn .3s cubic-bezier(.34,1.56,.64,1)';
+    el.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><div style="font-size:.85rem;font-weight:800;color:var(--rd)">🔔 Vencimentos próximos!</div><button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;cursor:pointer;color:var(--t3);font-size:1rem">✕</button></div>${urgentes.slice(0,3).map(u=>`<div style="display:flex;justify-content:space-between;font-size:.78rem;padding:5px 0;border-bottom:1px solid var(--bd)"><div><strong>${u.nome}</strong><br><span style="color:var(--t3)">${u.tipo} · ${u.data}</span></div><span style="font-weight:800;color:var(--rd)">${fmt(u.valor)}</span></div>`).join('')}${urgentes.length>3?`<div style="font-size:.72rem;color:var(--t3);margin-top:6px">+${urgentes.length-3} mais...</div>`:''}`;
+    document.body.appendChild(el);
+    setTimeout(()=>{el.style.opacity='0';el.style.transition='opacity .5s';setTimeout(()=>el.remove(),500);},8000);
+  },2000);
+}
+
+// Melhoria 1: Gráfico de gastos por mês em initDashC
+function initGastosChart(){
+  const cg=document.getElementById('ch-gastos');
+  if(!cg)return;
+  const meses=[];const labels=[];const gastoData=[];const pagData=[];
+  for(let i=5;i>=0;i--){
+    const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+    const ms=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    meses.push(ms);
+    labels.push(MS[d.getMonth()]+'/'+(d.getFullYear()+'').slice(2));
+    const itensMes=S.dm.filter(x=>x.data&&x.data.slice(0,7)===ms);
+    gastoData.push(itensMes.reduce((s,x)=>s+Number(x.valor),0));
+    pagData.push(itensMes.filter(x=>x.status==='pago').reduce((s,x)=>s+Number(x.valor),0));
+  }
+  S.charts['gastos']=new Chart(cg,{type:'bar',data:{labels,datasets:[
+    {label:'Total',data:gastoData,backgroundColor:'rgba(59,130,246,.25)',borderColor:'#3b82f6',borderWidth:2,borderRadius:6,borderSkipped:false},
+    {label:'Pago',data:pagData,backgroundColor:'rgba(0,200,150,.5)',borderColor:'#00c896',borderWidth:2,borderRadius:6,borderSkipped:false}
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{font:{size:11,weight:'700'},boxWidth:12,boxHeight:12,padding:12,borderRadius:3}},tooltip:{callbacks:{label:ctx=>' '+ctx.dataset.label+': '+fmt(ctx.raw)}}},scales:{y:{grid:{color:'rgba(0,0,0,.04)'},ticks:{callback:v=>fmt(v),font:{size:9}}},x:{grid:{display:false},ticks:{font:{size:10,weight:'700'}}}},animation:{duration:1000,easing:'easeOutQuart'}}});
+}
 
 // ── CALENDÁRIO ────────────────────────────────────────────────────────────────
 function rCal(){
@@ -817,7 +892,7 @@ function rDm(){
         <div class="dr-n">${d.nome}${d.parcelado?`<span class="pt" style="margin-left:6px">📦 ${d.parcela_atual}/${d.total_parcelas}</span>`:''}
           <span style="font-size:.65rem;font-weight:700;color:${tp.cor};background:${tp.bg};padding:1px 6px;border-radius:100px;margin-left:5px">${tp.tag}</span>
         </div>
-        <div class="dr-m">${d.data} · ${d.categoria}</div>
+        <div class="dr-m">${d.data} · ${d.categoria}${d.notas?` · <em style="color:var(--t4)">${d.notas}</em>`:''}</div>
       </div>
       <div class="dr-v">${fmt(d.valor)}</div>
       <label class="ios-toggle" onclick="event.stopPropagation();cycDm('${d.id}')" title="Marcar como pago">
@@ -939,12 +1014,12 @@ function rDm(){
       <button class="fb ${S.sortDm==='val-desc'?'on':''}" onclick="setSortDm('val-desc')">↓ Valor</button>
       <button class="fb ${S.sortDm==='val-asc'?'on':''}" onclick="setSortDm('val-asc')">↑ Valor</button>
     </div>
-    <div style="display:flex;gap:7px;align-items:center">
-      <button class="btn btn-o btn-sm" onclick="addMesVisivel(-1)">◀</button>
-      <button class="btn btn-o btn-sm" onclick="addMesVisivel(1)">▶ Próximo mês</button>
-      <button class="btn btn-p btn-sm" onclick="openM('add-dm')">+ Normal</button>
+    <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-p" onclick="openM('add-dm')">+ Despesa</button>
       <button class="btn btn-o btn-sm" onclick="openM('add-parc')">🛒 Parcelada</button>
-      <button class="btn btn-y btn-sm" onclick="openM('add-df')">📌 Fixa</button>
+      <button class="btn btn-y btn-sm" onclick="openM('add-df')">📌 + Fixa</button>
+      <button class="btn btn-o btn-sm" onclick="addMesVisivel(-1)">◀</button>
+      <button class="btn btn-o btn-sm" onclick="addMesVisivel(1)">▶ Próx. mês</button>
     </div>
   </div>
   ${mesesVisiveis.map(renderMes).join('')||'<p style="color:var(--t3);text-align:center;padding:20px;font-weight:600">Nenhuma despesa encontrada.</p>'}`;
@@ -1367,7 +1442,7 @@ async function cycDm(id){
   render();
 }
 
-async function saveDm(e){e.preventDefault();const f=new FormData(e.target);const r={id:uid(),nome:f.get('nome'),valor:Number(f.get('val')),categoria:f.get('cat'),data:f.get('data'),status:'aberto',historico:[],parcelado:false};await sb.from('despesas_mes').insert(r);S.dm.push(r);closeM();toast('Adicionada!');render();}
+async function saveDm(e){e.preventDefault();const f=new FormData(e.target);const r={id:uid(),nome:f.get('nome'),valor:Number(f.get('val')),categoria:f.get('cat'),data:f.get('data'),status:'aberto',historico:[],parcelado:false,notas:f.get('notas')||''};await sb.from('despesas_mes').insert(r);S.dm.push(r);closeM();toast('Adicionada!');render();}
 async function saveParc(e){e.preventDefault();const f=new FormData(e.target);const tp=Number(f.get('total')),pa=Number(f.get('atual')),val=Number(f.get('val')),at=Number(f.get('atrasadas')||0);const r={id:uid(),nome:f.get('nome'),valor:val,categoria:'Parcelado',data:f.get('data'),status:at>0?'atrasado':'aberto',historico:[],parcelado:true,parcela_atual:pa,total_parcelas:tp,total_pagar:val*(tp-pa+1),atrasadas_qtd:at};await sb.from('despesas_mes').insert(r);S.dm.push(r);closeM();toast(`Parcelado! Total: ${fmt(r.total_pagar)}`);render();}
 async function editDm(e){e.preventDefault();const f=new FormData(e.target);const id=S.mdata;const d=S.dm.find(x=>x.id===id);const nh=[...(d.historico||[]),{data:td(),obs:'Editado: '+(f.get('obs')||''),de:d.nome+'/'+d.valor,para:f.get('nome')+'/'+f.get('val')}];const upd={nome:f.get('nome'),valor:Number(f.get('val')),categoria:f.get('cat'),data:f.get('data'),historico:nh};await sb.from('despesas_mes').update(upd).eq('id',id);Object.assign(d,upd);closeM();toast('Atualizado!');render();}
 async function lancDm(e){e.preventDefault();const f=new FormData(e.target);const id=S.mdata;const d=S.dm.find(x=>x.id===id);const nh=[...(d.historico||[]),{data:f.get('data'),obs:f.get('obs'),valor:Number(f.get('val'))}];await sb.from('despesas_mes').update({historico:nh}).eq('id',id);d.historico=nh;closeM();toast('Lançado!');render();}
@@ -1383,7 +1458,22 @@ function buildModal(){
   if(S.modal==='add-div')body=`<form onsubmit="saveDiv(event)"><div class="frow"><div class="fg"><label>Nome da Dívida</label><input name="nome" required placeholder="Ex: Empréstimo banco"/></div><div class="fg"><label>Valor Total (R$)</label><input name="valor" type="number" step="0.01" required/></div></div><div class="frow"><div class="fg"><label>Juros</label><input name="juros" type="number" step="0.01" placeholder="0"/></div><div class="fg"><label>Tipo</label><select name="tj"><option value="%">% ao mês</option><option value="R$">Valor fixo (R$)</option></select></div></div><div class="fg"><label>Vencimento</label><input name="venc" type="date"/></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`;
   if(S.modal==='edit-div'){const d=S.dividas.find(x=>x.id===S.mdata);body=d?`<div class="info-box">Edições ficam no histórico.</div><form onsubmit="editDiv(event)"><div class="frow"><div class="fg"><label>Nome</label><input name="nome" required value="${d.nome}"/></div><div class="fg"><label>Valor (R$)</label><input name="valor" type="number" step="0.01" value="${d.valor}" required/></div></div><div class="frow"><div class="fg"><label>Juros</label><input name="juros" type="number" step="0.01" value="${d.juros||0}"/></div><div class="fg"><label>Tipo</label><select name="tj"><option value="%" ${d.tipo_juros==='%'?'selected':''}>% ao mês</option><option value="R$" ${d.tipo_juros==='R$'?'selected':''}>Valor fixo (R$)</option></select></div></div><div class="frow"><div class="fg"><label>Vencimento</label><input name="venc" type="date" value="${d.vencimento||''}"/></div><div class="fg"><label>Motivo</label><input name="obs" placeholder="Ex: Renegociação"/></div></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`:'<p>Não encontrado.</p>';}
   if(S.modal==='lanc-div')body=`<form onsubmit="saveLancDiv(event)"><div class="frow"><div class="fg"><label>Data</label><input name="data" type="date" value="${td()}" required/></div><div class="fg"><label>Valor Pago (R$)</label><input name="val" type="number" step="0.01" required/></div></div><div class="fg"><label>Observação</label><input name="obs" placeholder="Ex: Parcela 3/12"/></div><button class="btn btn-p btn-full" type="submit">Confirmar</button></form>`;
-  if(S.modal==='log-div'){const d=S.dividas.find(x=>x.id===S.mdata);const log=d?[...(d.log||[])].reverse():[];body=`<div class="info-box">📋 Histórico inalterável</div>`+(log.length?`<table class="tbl"><thead><tr><th>Data</th><th>Tipo</th><th>Detalhes</th></tr></thead><tbody>${log.map(h=>`<tr><td>${h.data}</td><td><span class="badge ${h.tipo==='pagamento'?'bg-g':'bg-b'}">${h.tipo||'edição'}</span></td><td style="font-size:.8rem">${h.obs||''} ${h.valor?'— '+fmt(h.valor):''} ${h.para?'→ '+h.para:''}</td></tr>`).join('')}</tbody></table>`:'<p style="text-align:center;padding:20px;color:var(--t3)">Nenhum registro.</p>');}
+  if(S.modal==='log-div'){const d=S.dividas.find(x=>x.id===S.mdata);const log=d?[...(d.log||[])].reverse():[];
+    const saldoAtual=d?Number(d.valor):0;
+    body=`<div style="background:var(--s2);border-radius:9px;padding:11px 14px;margin-bottom:14px;display:flex;justify-content:space-between"><span style="font-size:.8rem;font-weight:700;color:var(--t3)">Saldo atual</span><span style="font-family:'Instrument Serif',serif;font-weight:800;color:var(--rd)">${fmt(saldoAtual)}</span></div>`+(log.length?log.map(h=>`<div style="display:flex;gap:12px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--bd)">
+      <div style="width:36px;height:36px;border-radius:9px;background:${h.tipo==='pagamento'?'var(--gl)':'var(--bll)'};display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0">${h.tipo==='pagamento'?'💳':'✏️'}</div>
+      <div style="flex:1">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span class="badge ${h.tipo==='pagamento'?'bg-g':'bg-b'}">${h.tipo||'edição'}</span>
+          <span style="font-size:.72rem;color:var(--t4)">${h.data}</span>
+        </div>
+        ${h.valor?`<div style="font-family:'Instrument Serif',serif;font-weight:800;color:var(--gd);margin-top:4px">-${fmt(h.valor)}</div>`:''}
+        ${h.saldoAntes!==undefined?`<div style="font-size:.75rem;color:var(--t3);margin-top:2px">${fmt(h.saldoAntes)} → ${fmt(h.saldoDepois)}</div>`:''}
+        ${h.obs?`<div style="font-size:.78rem;color:var(--t2);margin-top:3px">${h.obs}</div>`:''}
+        ${h.para&&!h.saldoAntes?`<div style="font-size:.75rem;color:var(--t3);margin-top:2px">→ ${h.para}</div>`:''}
+      </div>
+    </div>`).join(''):'<p style="text-align:center;padding:20px;color:var(--t3)">Nenhum registro de alteração.</p>');
+  }
   if(S.modal==='add-cred')body=`<form onsubmit="saveCred(event)"><div class="frow"><div class="fg"><label>Nome</label><input name="nome" required/></div><div class="fg"><label>Valor (R$)</label><input name="val" type="number" step="0.01" required/></div></div><div class="frow"><div class="fg"><label>Vencimento</label><input name="venc" type="date"/></div><div class="fg"><label>Status</label><select name="status"><option value="pendente">Pendente</option><option value="parcial">Parcial</option><option value="recebido">Recebido</option></select></div></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`;
   if(S.modal==='edit-cred'){const c=S.creditos.find(x=>x.id===S.mdata);body=c?`<div class="info-box">Edições ficam no histórico.</div><form onsubmit="editCred(event)"><div class="frow"><div class="fg"><label>Nome</label><input name="nome" required value="${c.nome}"/></div><div class="fg"><label>Valor (R$)</label><input name="val" type="number" step="0.01" value="${c.valor}" required/></div></div><div class="fg"><label>Vencimento</label><input name="venc" type="date" value="${c.vencimento||''}"/></div><div class="fg"><label>Motivo</label><input name="obs" placeholder="Motivo"/></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`:'<p>Não encontrado.</p>';}
   if(S.modal==='lanc-cred'){
@@ -1409,7 +1499,7 @@ function buildModal(){
   if(S.modal==='log-cred'){const c=S.creditos.find(x=>x.id===S.mdata);const log=c?[...(c.log||[])].reverse():[];body=`<div class="info-box">📋 Histórico inalterável — edições e recebimentos</div>`+(log.length?`<table class="tbl"><thead><tr><th>Data</th><th>Tipo</th><th>Valor</th><th>Obs.</th></tr></thead><tbody>${log.map(h=>`<tr><td>${h.data}</td><td><span class="badge ${h.tipo==='recebimento'?'bg-g':'bg-b'}">${h.tipo||'edição'}</span></td><td style="font-weight:700;color:var(--gd)">${h.valor?fmt(h.valor):''}</td><td style="font-size:.8rem">${h.obs||''} ${h.para?'→ '+h.para:''}</td></tr>`).join('')}</tbody></table>`:'<p style="text-align:center;padding:20px;color:var(--t3)">Nenhum registro.</p>');}
   if(S.modal==='add-cart')body=`<form onsubmit="saveCart(event)"><div class="frow"><div class="fg"><label>Nome</label><input name="nome" required/></div><div class="fg"><label>Limite (R$)</label><input name="lim" type="number" step="0.01" required/></div></div><div class="frow"><div class="fg"><label>Fatura Atual</label><input name="sal" type="number" step="0.01"/></div><div class="fg"><label>Juros % a.m.</label><input name="juros" type="number" step="0.01"/></div></div><div class="frow"><div class="fg"><label>Dia Vcto</label><input name="venc" type="number" min="1" max="31"/></div><div class="fg"><label>Dia Fech.</label><input name="fech" type="number" min="1" max="31"/></div></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`;
   if(S.modal==='edit-cart'){const c=S.cartoes.find(x=>x.id===S.mdata);body=`<form onsubmit="updFatura(event)"><div class="fg"><label>Novo valor da fatura — ${c?c.nome:''}</label><input name="sal" type="number" step="0.01" value="${c?Number(c.saldo_atual||0):0}" required/></div><button class="btn btn-p btn-full" type="submit">Atualizar</button></form>`;}
-  if(S.modal==='add-dm')body=`<form onsubmit="saveDm(event)"><div class="frow"><div class="fg"><label>Descrição</label><input name="nome" required/></div><div class="fg"><label>Valor (R$)</label><input name="val" type="number" step="0.01" required/></div></div><div class="frow"><div class="fg"><label>Categoria</label><select name="cat">${CATS.map(c=>`<option>${c}</option>`).join('')}</select></div><div class="fg"><label>Data</label><input name="data" type="date" value="${td()}"/></div></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`;
+  if(S.modal==='add-dm')body=`<form onsubmit="saveDm(event)"><div class="frow"><div class="fg"><label>Descrição</label><input name="nome" required/></div><div class="fg"><label>Valor (R$)</label><input name="val" type="number" step="0.01" required/></div></div><div class="frow"><div class="fg"><label>Categoria</label><select name="cat">${CATS.map(c=>`<option>${c}</option>`).join('')}</select></div><div class="fg"><label>Data</label><input name="data" type="date" value="${td()}"/></div></div><div class="fg"><label>Notas (opcional)</label><input name="notas" placeholder="Observações, detalhes..."/></div><button class="btn btn-p btn-full" type="submit"><div class='fg'><label>Notas (opcional)</label><input name='notas' placeholder='Observações, detalhes...'/></div>Salvar</button></form>`;
   if(S.modal==='add-parc')body=`<form onsubmit="saveParc(event)" id="fparc"><div class="frow"><div class="fg"><label>Descrição</label><input name="nome" required placeholder="Ex: TV Samsung"/></div><div class="fg"><label>Valor da Parcela (R$)</label><input name="val" type="number" step="0.01" required oninput="calcPrev()"/></div></div><div class="frow3"><div class="fg"><label>Parcela atual</label><input name="atual" type="number" min="1" value="1" required oninput="calcPrev()"/></div><div class="fg"><label>Total parcelas</label><input name="total" type="number" min="1" required oninput="calcPrev()"/></div><div class="fg"><label>Parcelas atrasadas</label><input name="atrasadas" type="number" min="0" value="0"/></div></div><div class="warn-box">ℹ️ Se tiver parcelas atrasadas, informe o número acima. A despesa será marcada como atrasada.</div><div class="fg"><label>Data da parcela atual</label><input name="data" type="date" value="${td()}"/></div><div id="parc-prev" style="display:none;background:var(--pll);border-radius:var(--rsm);padding:11px 13px;font-size:.85rem;color:var(--pu);font-weight:700;margin-bottom:14px"></div><button class="btn btn-p btn-full" type="submit">Salvar Parcelado</button></form>`;
   if(S.modal==='det-dm'){const d=S.dm.find(x=>x.id===S.mdata);if(!d)body='<p>Não encontrado.</p>';else{const isPg=d.status==='pago';const isAt=d.status==='atrasado'||(d.data<td()&&d.status==='aberto');body=`<div style="background:${isPg?'var(--gl)':isAt?'var(--rl)':'var(--s2)'};border-radius:var(--rsm);padding:13px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between"><div><div style="font-weight:800;color:var(--tx);font-size:1.02rem">${d.nome}</div><div style="font-size:.77rem;color:var(--t3);margin-top:2px">${d.data} · ${d.categoria}</div>${d.parcelado?`<div class="pt" style="margin-top:5px">📦 Parcela ${d.parcela_atual}/${d.total_parcelas} · Total: ${fmt(d.total_pagar)}${(d.atrasadas_qtd||0)>0?` · ⚠️ ${d.atrasadas_qtd} atrasada(s)`:''}</div>`:''}</div><div style="text-align:right"><div style="font-family:'Instrument Serif',serif;font-size:1.25rem;font-weight:700;color:var(--rd)">${fmt(d.valor)}</div><button class="sp ${isPg?'sp-pg':isAt?'sp-at':'sp-ab'}" onclick="cycDm('${d.id}');closeM()">${isPg?'✅ Pago':isAt?'⚠️ Atrasado':'○ Aberto'}</button></div></div><div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${d.categoria!=='Juros Dívida'?`<button class="btn btn-y btn-sm" onclick="S.modal='edit-dm';render()">✏️ Editar</button>`:''}${d.categoria!=='Juros Dívida'?`<button class="btn btn-o btn-sm" onclick="S.modal='lanc-dm';render()">+ Lançamento</button>`:''}<button class="btn btn-o btn-sm" onclick="S.modal='hist-dm';render()">📋 Histórico (${(d.historico||[]).length})</button>${d.categoria!=='Juros Dívida'?`<button class="btn btn-d btn-sm" onclick="remDm('${d.id}');closeM()">Remover</button>`:''}</div>`;}}
   if(S.modal==='edit-dm'){const d=S.dm.find(x=>x.id===S.mdata);body=d?`<div class="info-box">Edições ficam no histórico.</div><form onsubmit="editDm(event)"><div class="frow"><div class="fg"><label>Nome</label><input name="nome" value="${d.nome}" required/></div><div class="fg"><label>Valor</label><input name="val" type="number" step="0.01" value="${d.valor}" required/></div></div><div class="frow"><div class="fg"><label>Categoria</label><select name="cat">${CATS.map(c=>`<option ${d.categoria===c?'selected':''}>${c}</option>`).join('')}</select></div><div class="fg"><label>Data</label><input name="data" type="date" value="${d.data}"/></div></div><div class="fg"><label>Motivo</label><input name="obs" placeholder="Por que editou?"/></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`:'<p>Não encontrado.</p>';}
@@ -1484,6 +1574,20 @@ async function ensureDB(){
   try{await sb.from('cal_obs').select('id').limit(1);}catch(e){}
 }
 if(sessionStorage.getItem('fp')==='1'){ensureDB();loadAll();}
+
+// Lembrete de backup semanal
+function checkBackupReminder(){
+  const last=localStorage.getItem('fp_last_backup');
+  const now=Date.now();
+  if(!last||now-parseInt(last)>7*24*60*60*1000){
+    setTimeout(()=>{
+      const el=document.createElement('div');
+      el.style.cssText='position:fixed;bottom:80px;right:24px;background:#1d4ed8;color:#fff;padding:13px 18px;border-radius:12px;font-size:.85rem;font-weight:700;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.2);display:flex;align-items:center;gap:10px;max-width:320px';
+      el.innerHTML='💾 Faça um backup dos seus dados! <button onclick="exportBackup();localStorage.setItem(\'fp_last_backup\',Date.now());this.parentElement.remove()" style="background:#fff;color:#1d4ed8;border:none;border-radius:7px;padding:5px 11px;font-weight:800;cursor:pointer;font-family:inherit;margin-left:4px">Exportar agora</button><button onclick="this.parentElement.remove()" style="background:transparent;color:rgba(255,255,255,.5);border:none;font-size:1.1rem;cursor:pointer;margin-left:4px">✕</button>';
+      document.body.appendChild(el);
+    },3000);
+  }
+}
 </script>
 </body>
 </html>
