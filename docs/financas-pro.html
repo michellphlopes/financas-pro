@@ -1684,24 +1684,23 @@ async function saveDesp(e){
     const dia=Number(f.get('dia'))||1;
     const r={id:uid(),nome,valor:val,dia,categoria:'Fixo'};
     const{error}=await sb.from('despesas_fixas').insert(r);
-    if(error){toast('Erro ao salvar fixa: '+error.message,'err');return;}
+    if(error){toast('Erro: '+error.message,'err');return;}
     S.df.push(r);
-    await syncFixas();
-    closeM();toast('Despesa fixa adicionada!');render();
+    closeM();toast('Fixa adicionada! Recarregando...');
+    setTimeout(()=>loadAll(),500);
   } else if(tipo==='parcelada'){
     const pa=Number(f.get('atual'))||1;
     const tp=Number(f.get('total'))||1;
     const at=Number(f.get('atrasadas'))||0;
     const r={id:uid(),nome,valor:val,categoria:'Parcelado',data,status:at>0?'atrasado':'aberto',historico:[],parcelado:true,parcela_atual:pa,total_parcelas:tp,total_pagar:val*(tp-pa+1),atrasadas_qtd:at,notas};
     const{error}=await sb.from('despesas_mes').insert(r);
-    if(error){toast('Erro ao salvar parcelado: '+error.message,'err');return;}
+    if(error){toast('Erro: '+error.message,'err');return;}
     S.dm.push(r);
-    await syncParcelas();
-    closeM();toast('Parcelado adicionado! Total: '+fmt(r.total_pagar));render();
+    closeM();toast('Parcelado adicionado!');render();
   } else {
     const r={id:uid(),nome,valor:val,categoria:'Outros',data,status:'aberto',historico:[],parcelado:false,notas};
     const{error}=await sb.from('despesas_mes').insert(r);
-    if(error){toast('Erro ao salvar: '+error.message,'err');return;}
+    if(error){toast('Erro: '+error.message,'err');return;}
     S.dm.push(r);
     closeM();toast('Despesa adicionada!');render();
   }
