@@ -399,8 +399,13 @@ async function syncJuros(){
     }
   }
   if(novos.length>0){
-    for(let i=0;i<novos.length;i+=50){
-      await sb.from('despesas_mes').insert(novos.slice(i,i+50)).onConflict('id').ignore();
+    // Verifica quais IDs já existem antes de inserir para não sobrescrever status pago
+    const ids=novos.map(r=>r.id);
+    const {data:exist}=await sb.from('despesas_mes').select('id').in('id',ids);
+    const existSet=new Set((exist||[]).map(x=>x.id));
+    const reaisNovos=novos.filter(r=>!existSet.has(r.id));
+    for(let i=0;i<reaisNovos.length;i+=50){
+      await sb.from('despesas_mes').insert(reaisNovos.slice(i,i+50));
     }
   }
 }
@@ -429,8 +434,13 @@ async function syncFixas(){
   }
   // Batch insert - muito mais rápido
   if(novos.length>0){
-    for(let i=0;i<novos.length;i+=50){
-      await sb.from('despesas_mes').insert(novos.slice(i,i+50)).onConflict('id').ignore();
+    // Verifica quais IDs já existem antes de inserir para não sobrescrever status pago
+    const ids=novos.map(r=>r.id);
+    const {data:exist}=await sb.from('despesas_mes').select('id').in('id',ids);
+    const existSet=new Set((exist||[]).map(x=>x.id));
+    const reaisNovos=novos.filter(r=>!existSet.has(r.id));
+    for(let i=0;i<reaisNovos.length;i+=50){
+      await sb.from('despesas_mes').insert(reaisNovos.slice(i,i+50));
     }
   }
 }
@@ -461,8 +471,13 @@ async function syncParcelas(){
     }
   }
   if(novos.length>0){
-    for(let i=0;i<novos.length;i+=50){
-      await sb.from('despesas_mes').insert(novos.slice(i,i+50)).onConflict('id').ignore();
+    // Verifica quais IDs já existem antes de inserir para não sobrescrever status pago
+    const ids=novos.map(r=>r.id);
+    const {data:exist}=await sb.from('despesas_mes').select('id').in('id',ids);
+    const existSet=new Set((exist||[]).map(x=>x.id));
+    const reaisNovos=novos.filter(r=>!existSet.has(r.id));
+    for(let i=0;i<reaisNovos.length;i+=50){
+      await sb.from('despesas_mes').insert(reaisNovos.slice(i,i+50));
     }
   }
 }
