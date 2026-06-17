@@ -1720,7 +1720,9 @@ async function saveDesp(e){
     closeM();toast('Parcelado adicionado!');render();
   } else {
     const r={id:uid(),nome,valor:val,categoria:'Outros',data,status:'aberto',historico:[],parcelado:false,notas};
-    const{error}=await sb.from('despesas_mes').insert(r);
+    console.log('Salvando despesa:', r);
+    const{error,data:inserted}=await sb.from('despesas_mes').insert(r).select();
+    console.log('Resultado insert:', inserted, 'Erro:', error);
     if(error){toast('Erro: '+error.message,'err');return;}
     S.dm.push(r);
     closeM();toast('Despesa adicionada!');render();
