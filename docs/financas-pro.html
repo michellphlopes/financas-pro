@@ -366,61 +366,50 @@ function calcJuros(d){if(!d.juros||!d.valor)return 0;return d.tipo_juros==='R$'?
 async function syncJuros(){
   const hoje=new Date();
   const todayStr=new Date().toISOString().slice(0,10);
-
-  // Remove apenas juros NAO pagos do state e banco
   const jurosNaoPagos=S.dm.filter(d=>d.categoria==='Juros Dívida'&&d.status!=='pago').map(d=>d.id);
   S.dm=S.dm.filter(d=>!(d.categoria==='Juros Dívida'&&d.status!=='pago'));
-  for(const id of jurosNaoPagos){
-    try{await sb.from('despesas_mes').delete().eq('id',id);}catch(e){}
+  if(jurosNaoPagos.length>0){
+    for(let i=0;i<jurosNaoPagos.length;i+=50){
+      try{await sb.from('despesas_mes').delete().in('id',jurosNaoPagos.slice(i,i+50));}catch(e){}
+    }
   }
-
+  const novos=[];
   for(const div of S.dividas){
     if(!div.lancar_juros_despesa) continue;
     const j=calcJuros(div);
     if(j<=0) continue;
     let diaVenc=1;
     if(div.vencimento){const partes=div.vencimento.split('-');if(partes.length===3)diaVenc=parseInt(partes[2])||1;}
-
     for(let offset=0;offset<=12;offset++){
       const d=new Date(hoje.getFullYear(),hoje.getMonth()+offset,1);
       const ano=d.getFullYear();
       const mes=String(d.getMonth()+1).padStart(2,'0');
       const ultimoDia=new Date(ano,d.getMonth()+1,0).getDate();
       const dia=String(Math.min(diaVenc,ultimoDia)).padStart(2,'0');
-      const dataLanc=ano+"-"+mes+"-"+dia;
-      const id="juros_"+div.id+"_"+ano+"_"+mes;
-
-      // Se já existe e está pago, não mexe
+      const dataLanc=ano+'-'+mes+'-'+dia;
+      const id='juros_'+div.id+'_'+ano+'_'+mes;
       const jaExiste=S.dm.find(x=>x.id===id);
       if(jaExiste&&jaExiste.status==='pago') continue;
-
-      const r={
-        id,
-        nome:"Juros: "+div.nome,
-        valor:j,
-        categoria:'Juros Dívida',
-        data:dataLanc,
-        status:dataLanc<todayStr?'atrasado':'aberto',
-        historico:jaExiste?jaExiste.historico||[]:[],
-      };
-      // Upsert atualiza valor se já existia (ex: juros mudou)
-      await sb.from('despesas_mes').upsert(r);
+      const r={id,nome:'Juros: '+div.nome,valor:j,categoria:'Juros Dívida',data:dataLanc,status:dataLanc<todayStr?'atrasado':'aberto',historico:[]};
+      novos.push(r);
       const idx=S.dm.findIndex(x=>x.id===id);
       if(idx>=0) S.dm[idx]=r; else S.dm.push(r);
     }
   }
+  if(novos.length>0){
+    for(let i=0;i<novos.length;i+=50){
+      await sb.from('despesas_mes').upsert(novos.slice(i,i+50));
+    }
+  }
 }
-
-
 async function syncFixas(){
   const hoje=new Date();
   const meses=[];
-  // Últimos 3 meses + mês atual + próximos 12 meses = 16 meses total
   for(let i=3;i>=-12;i--){
     const d=new Date(hoje.getFullYear(),hoje.getMonth()-i,1);
     meses.push({ano:d.getFullYear(),mes:d.getMonth()+1});
   }
-
+  const novos=[];
   for(const fixa of S.df){
     for(const {ano,mes} of meses){
       const mesStr=String(mes).padStart(2,'0');
@@ -429,66 +418,50 @@ async function syncFixas(){
       const diaStr=String(dia).padStart(2,'0');
       const dataVenc=ano+"-"+mesStr+"-"+diaStr;
       const idFixa="fixa_"+fixa.id+"_"+ano+"_"+mesStr;
-      const jaExiste=S.dm.find(d=>d.id===idFixa);
-      if(jaExiste) continue;
-      const pagaManual=S.dm.find(d=>d.nome===fixa.nome&&d.data&&d.data.startsWith(ano+"-"+mesStr)&&d.id!==idFixa);
-      if(pagaManual) continue;
+      if(S.dm.find(d=>d.id===idFixa)) continue;
       const status=dataVenc<td()?'atrasado':'aberto';
       const r={id:idFixa,nome:fixa.nome,valor:fixa.valor,categoria:'Fixo',data:dataVenc,status,historico:[],parcelado:false,origem_fixa:fixa.id};
-      await sb.from('despesas_mes').upsert(r);
+      novos.push(r);
       S.dm.push(r);
     }
   }
+  // Batch insert - muito mais rápido
+  if(novos.length>0){
+    for(let i=0;i<novos.length;i+=50){
+      await sb.from('despesas_mes').upsert(novos.slice(i,i+50));
+    }
+  }
 }
-
 async function syncParcelas(){
-  // Gera lançamentos futuros automáticos para despesas parceladas
   const hoje=new Date();
-  const parceladas=S.dm.filter(d=>d.parcelado&&d.parcela_atual&&d.total_parcelas);
-
+  const parceladas=S.dm.filter(d=>d.parcelado&&d.parcela_atual&&d.total_parcelas&&!d.origem_parcela);
+  const novos=[];
   for(const parc of parceladas){
     const restantes=parc.total_parcelas-parc.parcela_atual;
     if(restantes<=0) continue;
-
-    // Extrai o dia da data original da parcela
     const dataBase=parc.data||td();
     const [anoBase,mesBase,diaBase]=dataBase.split('-');
     const dia=parseInt(diaBase)||1;
-
     for(let offset=1;offset<=restantes;offset++){
       const d=new Date(parseInt(anoBase),parseInt(mesBase)-1+offset,1);
       const ano=d.getFullYear();
       const mes=String(d.getMonth()+1).padStart(2,'0');
       const ultimoDia=new Date(ano,d.getMonth()+1,0).getDate();
       const diaFinal=String(Math.min(dia,ultimoDia)).padStart(2,'0');
-      const dataFutura=ano+"-"+mes+"-"+diaFinal;
-      const idFuturo="parc_"+parc.id+"_"+ano+"_"+mes;
-
-      // Não cria se já existe
-      const jaExiste=S.dm.find(x=>x.id===idFuturo);
-      if(jaExiste) continue;
-
-      const r={
-        id:idFuturo,
-        nome:parc.nome,
-        valor:parc.valor,
-        categoria:parc.categoria||'Parcelado',
-        data:dataFutura,
-        status:'aberto',
-        historico:[],
-        parcelado:true,
-        parcela_atual:parc.parcela_atual+offset,
-        total_parcelas:parc.total_parcelas,
-        total_pagar:parc.total_pagar,
-        atrasadas_qtd:0,
-        origem_parcela:parc.id
-      };
-      await sb.from('despesas_mes').upsert(r);
+      const dataFutura=ano+'-'+mes+'-'+diaFinal;
+      const idFuturo='parc_'+parc.id+'_'+ano+'_'+mes;
+      if(S.dm.find(x=>x.id===idFuturo)) continue;
+      const r={id:idFuturo,nome:parc.nome,valor:parc.valor,categoria:parc.categoria||'Parcelado',data:dataFutura,status:'aberto',historico:[],parcelado:true,parcela_atual:parc.parcela_atual+offset,total_parcelas:parc.total_parcelas,total_pagar:parc.total_pagar,atrasadas_qtd:0,origem_parcela:parc.id};
+      novos.push(r);
       S.dm.push(r);
     }
   }
+  if(novos.length>0){
+    for(let i=0;i<novos.length;i+=50){
+      await sb.from('despesas_mes').upsert(novos.slice(i,i+50));
+    }
+  }
 }
-
 function parcelasMesOffset(offset){return S.dm.filter(d=>d.parcelado&&d.parcela_atual&&d.total_parcelas).reduce((s,d)=>s+(offset<=(d.total_parcelas-d.parcela_atual)?Number(d.valor):0),0);}
 
 function totalDividaReal(){
@@ -708,34 +681,6 @@ function initGastosChart(){
     {label:'Total',data:gastoData,backgroundColor:'rgba(59,130,246,.25)',borderColor:'#3b82f6',borderWidth:2,borderRadius:6,borderSkipped:false},
     {label:'Pago',data:pagData,backgroundColor:'rgba(0,200,150,.5)',borderColor:'#00c896',borderWidth:2,borderRadius:6,borderSkipped:false}
   ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{font:{size:11,weight:'700'},boxWidth:12,boxHeight:12,padding:12}},tooltip:{callbacks:{label:ctx=>' '+ctx.dataset.label+': '+fmt(ctx.raw)}}},scales:{y:{grid:{color:'rgba(0,0,0,.04)'},ticks:{callback:v=>fmt(v),font:{size:9}}},x:{grid:{display:false},ticks:{font:{size:10,weight:'700'}}}},animation:{duration:1000,easing:'easeOutQuart'}}});
-}
-async function syncFixas(){
-  const hoje=new Date();
-  const meses=[];
-  // Últimos 3 meses + mês atual + próximos 12 meses = 16 meses total
-  for(let i=3;i>=-12;i--){
-    const d=new Date(hoje.getFullYear(),hoje.getMonth()-i,1);
-    meses.push({ano:d.getFullYear(),mes:d.getMonth()+1});
-  }
-
-  for(const fixa of S.df){
-    for(const {ano,mes} of meses){
-      const mesStr=String(mes).padStart(2,'0');
-      const ultimoDia=new Date(ano,mes,0).getDate();
-      const dia=Math.min(fixa.dia,ultimoDia);
-      const diaStr=String(dia).padStart(2,'0');
-      const dataVenc=ano+"-"+mesStr+"-"+diaStr;
-      const idFixa="fixa_"+fixa.id+"_"+ano+"_"+mesStr;
-      const jaExiste=S.dm.find(d=>d.id===idFixa);
-      if(jaExiste) continue;
-      const pagaManual=S.dm.find(d=>d.nome===fixa.nome&&d.data&&d.data.startsWith(ano+"-"+mesStr)&&d.id!==idFixa);
-      if(pagaManual) continue;
-      const status=dataVenc<td()?'atrasado':'aberto';
-      const r={id:idFixa,nome:fixa.nome,valor:fixa.valor,categoria:'Fixo',data:dataVenc,status,historico:[],parcelado:false,origem_fixa:fixa.id};
-      await sb.from('despesas_mes').upsert(r);
-      S.dm.push(r);
-    }
-  }
 }
 
 async function syncParcelas(){
