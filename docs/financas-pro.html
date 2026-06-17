@@ -266,8 +266,7 @@ body{background:var(--bg);color:var(--tx);font-family:'Cabinet Grotesk',sans-ser
       <div class="sbi" onclick="go('cred')" id="ni-cred"><span class="sbico">💰</span>Créditos</div>
       <div class="sbi" onclick="go('cart')" id="ni-cart"><span class="sbico">💳</span>Cartões</div>
       <div class="sbsec">Despesas</div>
-      <div class="sbi" onclick="go('dm')" id="ni-dm"><span class="sbico">🧾</span>Despesas do Mês</div>
-      <div class="sbi" onclick="go('df')" id="ni-df"><span class="sbico">📌</span>Despesas Fixas</div>
+      <div class="sbi" onclick="go('dm')" id="ni-dm"><span class="sbico">🧾</span>Despesas</div>
       <div class="sbsec">Análise</div>
       <div class="sbi" onclick="go('proj')" id="ni-proj"><span class="sbico">📈</span>Projeções</div>
       <div class="sbi" onclick="go('analise')" id="ni-analise"><span class="sbico">🧠</span>Análise Inteligente</div>
@@ -312,7 +311,7 @@ const CI={Alimentação:'🍽️',Moradia:'🏠',Transporte:'🚗',Saúde:'💊'
 const FERIADOS={'2026-01-01':'Ano Novo','2026-02-16':'Carnaval','2026-02-17':'Carnaval','2026-04-03':'Sexta-Feira Santa','2026-04-21':'Tiradentes','2026-05-01':'Dia do Trabalho','2026-06-04':'Corpus Christi','2026-09-07':'Independência','2026-10-12':'N.Sra.Aparecida','2026-11-02':'Finados','2026-11-15':'República','2026-12-25':'Natal'};
 
 let S={
-  dividas:[],creditos:[],cartoes:[],dm:[],df:[],obs:[],est:{meta:50000,reserva:0,renda:0,notas:''},
+  dividas:[],creditos:[],cartoes:[],dm:[],df:[],obs:[],est:{meta:50000,reserva:0,renda:50000,notas:''},
   tab:'dash',modal:null,mdata:null,vy:now.getFullYear(),vm:now.getMonth(),
   charts:{},re:0,filtroDiv:'todos',sortDiv:'valor-desc',filtroDm:'todos',sortDm:'data-desc'
 };
@@ -339,8 +338,10 @@ async function loadAll(){
     S.cartoes=(ca.data||[]).map(x=>({...x,saldoAtual:x.saldo_atual}));
     S.dm=(dm.data||[]).map(x=>({...x,historico:x.historico||[],status:x.status||'aberto'}));
     S.df=df.data||[];
-    if(es&&es.data){S.est=es.data;S.re=Number(es.data.renda)||0;}
+    if(es&&es.data){S.est=es.data;S.re=Number(es.data.renda)||50000;}
+    else{S.re=50000;}
     S.obs=ob.data||[];
+    await syncJuros();
     await syncFixas();
     await syncParcelas();
     render();
@@ -354,54 +355,53 @@ async function loadAll(){
 function calcJuros(d){if(!d.juros||!d.valor)return 0;return d.tipo_juros==='R$'?Number(d.juros):(Number(d.valor)*Number(d.juros))/100;}
 
 async function syncJuros(){
-  // Remove todos os lançamentos de juros existentes
-  S.dm=S.dm.filter(d=>d.categoria!=='Juros Dívida');
-  try{await sb.from('despesas_mes').delete().like('id','juros_%');}catch(e){}
-
   const hoje=new Date();
+  const todayStr=new Date().toISOString().slice(0,10);
+
+  // Remove apenas juros NAO pagos do state e banco
+  const jurosNaoPagos=S.dm.filter(d=>d.categoria==='Juros Dívida'&&d.status!=='pago').map(d=>d.id);
+  S.dm=S.dm.filter(d=>!(d.categoria==='Juros Dívida'&&d.status!=='pago'));
+  for(const id of jurosNaoPagos){
+    try{await sb.from('despesas_mes').delete().eq('id',id);}catch(e){}
+  }
 
   for(const div of S.dividas){
-    if(div.lancar_juros_despesa){
-      const j=calcJuros(div);
-      if(j<=0) continue;
+    if(!div.lancar_juros_despesa) continue;
+    const j=calcJuros(div);
+    if(j<=0) continue;
+    let diaVenc=1;
+    if(div.vencimento){const partes=div.vencimento.split('-');if(partes.length===3)diaVenc=parseInt(partes[2])||1;}
 
-      // Extrai o dia do vencimento
-      let diaVenc=1;
-      if(div.vencimento){
-        const partes=div.vencimento.split('-');
-        if(partes.length===3) diaVenc=parseInt(partes[2])||1;
-      }
+    for(let offset=0;offset<=12;offset++){
+      const d=new Date(hoje.getFullYear(),hoje.getMonth()+offset,1);
+      const ano=d.getFullYear();
+      const mes=String(d.getMonth()+1).padStart(2,'0');
+      const ultimoDia=new Date(ano,d.getMonth()+1,0).getDate();
+      const dia=String(Math.min(diaVenc,ultimoDia)).padStart(2,'0');
+      const dataLanc=`${ano}-${mes}-${dia}`;
+      const id=`juros_${div.id}_${ano}_${mes}`;
 
-      // Lança para mês atual e próximos 12 meses
-      for(let offset=0;offset<=12;offset++){
-        const d=new Date(hoje.getFullYear(),hoje.getMonth()+offset,1);
-        const ano=d.getFullYear();
-        const mes=String(d.getMonth()+1).padStart(2,'0');
-        // Garante que o dia não ultrapasse o último dia do mês
-        const ultimoDia=new Date(ano,d.getMonth()+1,0).getDate();
-        const dia=String(Math.min(diaVenc,ultimoDia)).padStart(2,'0');
-        const dataLanc=`${ano}-${mes}-${dia}`;
-        const id=`juros_${div.id}_${ano}_${mes}`;
+      // Se já existe e está pago, não mexe
+      const jaExiste=S.dm.find(x=>x.id===id);
+      if(jaExiste&&jaExiste.status==='pago') continue;
 
-        // Só cria se não foi marcado como pago
-        const jaExiste=S.dm.find(x=>x.id===id);
-        if(jaExiste) continue;
-
-        const r={
-          id,
-          nome:`Juros: ${div.nome}`,
-          valor:j,
-          categoria:'Juros Dívida',
-          data:dataLanc,
-          status:dataLanc<td()?'atrasado':'aberto',
-          historico:[]
-        };
-        await sb.from('despesas_mes').upsert(r);
-        S.dm.push(r);
-      }
+      const r={
+        id,
+        nome:`Juros: ${div.nome}`,
+        valor:j,
+        categoria:'Juros Dívida',
+        data:dataLanc,
+        status:dataLanc<todayStr?'atrasado':'aberto',
+        historico:jaExiste?jaExiste.historico||[]:[],
+      };
+      // Upsert atualiza valor se já existia (ex: juros mudou)
+      await sb.from('despesas_mes').upsert(r);
+      const idx=S.dm.findIndex(x=>x.id===id);
+      if(idx>=0) S.dm[idx]=r; else S.dm.push(r);
     }
   }
 }
+
 
 async function syncFixas(){
   // Gera lançamentos automáticos das despesas fixas nos últimos 3 meses + mês atual
@@ -498,7 +498,7 @@ function normCredor(nome){
   return words.length>0?words[0].charAt(0).toUpperCase()+words[0].slice(1):nome.split(' ')[0];
 }
 
-const TITLES={dash:'Dashboard',cal:'Calendário',div:'Dívidas',cred:'Créditos a Receber',cart:'Cartões de Crédito',dm:'Despesas do Mês',df:'Despesas Fixas',proj:'Projeções',analise:'Análise Inteligente',editor:'Editor HTML',ia:'Assistente IA'};
+const TITLES={dash:'Dashboard',cal:'Calendário',div:'Dívidas',cred:'Créditos a Receber',cart:'Cartões de Crédito',dm:'Despesas',df:'Despesas',proj:'Projeções',analise:'Análise Inteligente',editor:'Editor HTML',ia:'Assistente IA'};
 function go(tab){S.tab=tab;S.modal=null;document.querySelectorAll('.sbi').forEach(el=>el.classList.remove('on'));const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('on');document.getElementById('tbt').textContent=TITLES[tab]||tab;render();window.scrollTo(0,0);}
 
 let _rt;
@@ -755,11 +755,13 @@ function rDm(){
   if(!S.dmMinimized) S.dmMinimized={};
   if(!S.dmMesesVisiveis) S.dmMesesVisiveis=new Set();
 
-  const todos=[...S.dm];
   const mesAtual=new Date().toISOString().slice(0,7);
   const mesProx=(()=>{const d=new Date();d.setMonth(d.getMonth()+1);return d.toISOString().slice(0,7);})();
 
-  // Agrupar TODOS por mês
+  // Combina despesas do mes + fixas geradas (que tem origem_fixa) + todas
+  const todos=[...S.dm];
+
+  // Agrupar por mês
   const gruposTodos={};
   todos.forEach(d=>{
     const mes=d.data?d.data.slice(0,7):'sem-data';
@@ -767,29 +769,40 @@ function rDm(){
     gruposTodos[mes].push(d);
   });
 
-  // Meses com pendências para o painel do topo
+  // Meses com pendências
   const mesesComPendencia=Object.entries(gruposTodos)
     .filter(([,itens])=>itens.some(d=>d.status!=='pago'))
     .sort(([a],[b])=>a.localeCompare(b));
 
-  // Meses VISÍVEIS na lista: atrasados + atual + próximo + extras clicados
+  // Meses visíveis: atrasados + atual + próximo + extras
   const mesesBase=new Set();
   Object.keys(gruposTodos).filter(m=>m<mesAtual&&gruposTodos[m].some(d=>d.status!=='pago')).forEach(m=>mesesBase.add(m));
   if(gruposTodos[mesAtual]) mesesBase.add(mesAtual);
   if(gruposTodos[mesProx]) mesesBase.add(mesProx);
   S.dmMesesVisiveis.forEach(m=>mesesBase.add(m));
-
   let mesesVisiveis=[...mesesBase].sort((a,b)=>b.localeCompare(a));
-  if(S.filtroDm==='pago') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.every(d=>d.status==='pago'));
+
+  // Aplicar filtro de tipo e status
+  if(S.filtroDm==='pago') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>d.status==='pago'));
   if(S.filtroDm==='atrasado') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')));
   if(S.filtroDm==='aberto') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>d.status==='aberto'));
+  if(S.filtroDm==='fixas') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>d.origem_fixa||d.categoria==='Fixo'));
+  if(S.filtroDm==='avulsas') mesesVisiveis=mesesVisiveis.filter(m=>gruposTodos[m]?.some(d=>!d.origem_fixa&&d.categoria!=='Fixo'));
 
-  // Stats apenas até o mês atual
+  // Stats só até mês atual
   const todosAteMesAtual=todos.filter(d=>d.data&&d.data.slice(0,7)<=mesAtual);
   const tot=todosAteMesAtual.reduce((s,d)=>s+Number(d.valor),0);
-  const pagas=todosAteMesAtual.filter(d=>d.status==='pago').length;
+  const totalPago=todosAteMesAtual.filter(d=>d.status==='pago').reduce((s,d)=>s+Number(d.valor),0);
+  const pendente=tot-totalPago;
   const atras=todosAteMesAtual.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
-  const pendente=todosAteMesAtual.filter(d=>d.status!=='pago').reduce((s,d)=>s+Number(d.valor),0);
+
+  // Cor e ícone por tipo de despesa
+  function tipoDesp(d){
+    if(d.origem_fixa||d.categoria==='Fixo') return{cor:'#0ea5e9',bg:'rgba(14,165,233,.12)',ico:'📌',tag:'Fixa'};
+    if(d.parcelado) return{cor:'#7c3aed',bg:'rgba(124,58,237,.12)',ico:'🛒',tag:'Parcelado'};
+    if(d.categoria==='Juros Dívida') return{cor:'#ff3d5a',bg:'rgba(255,61,90,.12)',ico:'💸',tag:'Juros'};
+    return{cor:CC[d.categoria]||'#94a3b8',bg:(CC[d.categoria]||'#94a3b8')+'20',ico:CI[d.categoria]||'📦',tag:d.categoria||'Avulsa'};
+  }
 
   function renderItem(d){
     const isPg=d.status==='pago';
@@ -797,10 +810,13 @@ function rDm(){
     const trk=isPg?'on':isAt?'at':'off';
     const lbl=isPg?'Pago':isAt?'Atrasado':'Aberto';
     const lblCor=isPg?'var(--gd)':isAt?'var(--rd)':'var(--t3)';
-    return`<div class="dr ${isPg?'paga':isAt?'atrasada':''}" onclick="openM('det-dm','${d.id}')">
-      <div class="dr-ico" style="background:${CC[d.categoria]||'#94a3b8'}18"><span>${CI[d.categoria]||'📦'}</span></div>
+    const tp=tipoDesp(d);
+    return`<div class="dr ${isPg?'paga':isAt?'atrasada':''}" onclick="openM('det-dm','${d.id}')" style="border-left:3px solid ${tp.cor}">
+      <div class="dr-ico" style="background:${tp.bg}"><span>${tp.ico}</span></div>
       <div class="dr-info">
-        <div class="dr-n">${d.nome}${d.parcelado?`<span class="pt" style="margin-left:6px">📦 ${d.parcela_atual}/${d.total_parcelas}</span>`:''}</div>
+        <div class="dr-n">${d.nome}${d.parcelado?`<span class="pt" style="margin-left:6px">📦 ${d.parcela_atual}/${d.total_parcelas}</span>`:''}
+          <span style="font-size:.65rem;font-weight:700;color:${tp.cor};background:${tp.bg};padding:1px 6px;border-radius:100px;margin-left:5px">${tp.tag}</span>
+        </div>
         <div class="dr-m">${d.data} · ${d.categoria}</div>
       </div>
       <div class="dr-v">${fmt(d.valor)}</div>
@@ -813,14 +829,38 @@ function rDm(){
 
   function renderMes(mes){
     const itens=(gruposTodos[mes]||[]);
+    // Aplica filtro de tipo dentro do mês
     let itensFiltrados=[...itens];
-    if(S.sortDm==='val-desc') itensFiltrados.sort((a,b)=>Number(b.valor)-Number(a.valor));
-    if(S.sortDm==='val-asc') itensFiltrados.sort((a,b)=>Number(a.valor)-Number(b.valor));
+    if(S.filtroDm==='fixas') itensFiltrados=itensFiltrados.filter(d=>d.origem_fixa||d.categoria==='Fixo');
+    if(S.filtroDm==='avulsas') itensFiltrados=itensFiltrados.filter(d=>!d.origem_fixa&&d.categoria!=='Fixo');
+    // Ordenação: pagos no final por valor desc, não pagos por valor desc
+    if(S.sortDm==='val-desc'){
+      itensFiltrados.sort((a,b)=>{
+        if(a.status==='pago'&&b.status!=='pago') return 1;
+        if(a.status!=='pago'&&b.status==='pago') return -1;
+        return Number(b.valor)-Number(a.valor);
+      });
+    } else if(S.sortDm==='val-asc'){
+      itensFiltrados.sort((a,b)=>{
+        if(a.status==='pago'&&b.status!=='pago') return 1;
+        if(a.status!=='pago'&&b.status==='pago') return -1;
+        return Number(a.valor)-Number(b.valor);
+      });
+    } else {
+      // Padrão: não pagos primeiro por valor desc, pagos depois por valor desc
+      itensFiltrados.sort((a,b)=>{
+        if(a.status==='pago'&&b.status!=='pago') return 1;
+        if(a.status!=='pago'&&b.status==='pago') return -1;
+        return Number(b.valor)-Number(a.valor);
+      });
+    }
+
     const totalMes=itens.reduce((s,d)=>s+Number(d.valor),0);
-    const pagasMes=itens.filter(d=>d.status==='pago').length;
-    const pendenteMes=itens.filter(d=>d.status!=='pago').reduce((s,d)=>s+Number(d.valor),0);
+    const pagasMes=itens.filter(d=>d.status==='pago');
+    const totalPagoMes=pagasMes.reduce((s,d)=>s+Number(d.valor),0);
+    const pendenteMes=totalMes-totalPagoMes;
     const atrasMes=itens.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
-    const todoPago=itens.length>0&&pagasMes===itens.length;
+    const todoPago=itens.length>0&&pagasMes.length===itens.length;
     const [ano,m]=mes.split('-');
     const nomeMes=`${MN[parseInt(m)-1]} ${ano}`;
     const corH=todoPago?'var(--gd)':atrasMes>0?'var(--rd)':'var(--yd)';
@@ -829,30 +869,28 @@ function rDm(){
 
     return`<div style="margin-bottom:16px;border-radius:12px;border:1.5px solid ${todoPago?'rgba(0,200,150,.2)':atrasMes>0?'rgba(255,61,90,.2)':'rgba(245,168,0,.2)'};overflow:hidden">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:${bgH};cursor:pointer" onclick="toggleMiniDm('${mes}')">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-size:.95rem;font-weight:800;color:${corH}">${nomeMes}</span>
-          <span style="font-size:.72rem;font-weight:700;color:${corH};opacity:.7">${itens.length} despesa(s)</span>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:.97rem;font-weight:800;color:${corH}">${nomeMes}</span>
+          <span style="font-size:.72rem;font-weight:700;color:${corH};opacity:.7">${itens.length} item(s)</span>
           ${todoPago?'<span class="badge bg-g">✅ Concluído</span>':''}
           ${atrasMes>0?`<span class="badge bg-r">⚠️ ${atrasMes} atrasada(s)</span>`:''}
         </div>
         <div style="display:flex;align-items:center;gap:14px">
           <div style="text-align:right">
-            ${!todoPago?`<div style="font-size:.7rem;font-weight:700;color:${corH};opacity:.7">Pendente: ${fmt(pendenteMes)}</div>`:''}
-            <div style="font-size:.7rem;font-weight:700;color:var(--gd)">✅ Pago: ${fmt(itens.filter(d=>d.status==='pago').reduce((s,d)=>s+Number(d.valor),0))}</div>
+            ${!todoPago?`<div style="font-size:.71rem;font-weight:700;color:${corH}">Pendente: ${fmt(pendenteMes)}</div>`:''}
+            <div style="font-size:.71rem;font-weight:700;color:var(--gd)">✅ Pago: ${fmt(totalPagoMes)}</div>
           </div>
           <span style="font-family:'Instrument Serif',serif;font-weight:800;color:${corH};font-size:1.05rem">${fmt(totalMes)}</span>
-          <span style="font-size:1rem;color:${corH};font-weight:700">${mini?'▶':'▼'}</span>
+          <span style="color:${corH};font-weight:700">${mini?'▶':'▼'}</span>
         </div>
       </div>
-      ${mini?'':itens.length>0?`<div style="padding:10px 10px 6px;background:var(--sf)">${itensFiltrados.map(renderItem).join('')}</div>`:`<div style="padding:14px;text-align:center;color:var(--t3);font-size:.85rem;background:var(--sf)">Nenhuma despesa neste mês.</div>`}
+      ${mini?'':itensFiltrados.length>0?`<div style="padding:10px 10px 6px;background:var(--sf)">${itensFiltrados.map(renderItem).join('')}</div>`:`<div style="padding:14px;text-align:center;color:var(--t3);font-size:.85rem;background:var(--sf)">Nenhuma despesa neste mês.</div>`}
     </div>`;
   }
 
-  // Painel de pendências no topo
-  // Meses com pendência: separar atrasados, atual, próximo e futuros
-  const mesAtualStr=new Date().toISOString().slice(0,7);
-  const mesProxStr=(()=>{const d=new Date();d.setMonth(d.getMonth()+1);return d.toISOString().slice(0,7);})();
-
+  // Painel de pendências
+  const mesAtualStr=mesAtual;
+  const mesProxStr=mesProx;
   const mesesAtrasados=mesesComPendencia.filter(([m])=>m<mesAtualStr);
   const mesAtualPend=mesesComPendencia.find(([m])=>m===mesAtualStr);
   const mesProxPend=mesesComPendencia.find(([m])=>m===mesProxStr);
@@ -860,10 +898,10 @@ function rDm(){
 
   function cardPend([mes,itens],cor='var(--rd)',bg='#fff'){
     const pend=itens.filter(d=>d.status!=='pago').reduce((s,d)=>s+Number(d.valor),0);
-    const atras=itens.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
+    const at=itens.filter(d=>d.status==='atrasado'||(d.data<td()&&d.status==='aberto')).length;
     const [ano,m]=mes.split('-');
-    return`<div style="background:${bg};border-radius:10px;padding:11px 15px;border:1.5px solid ${atras>0?'rgba(255,61,90,.3)':'rgba(245,168,0,.3)'};cursor:pointer;min-width:130px" onclick="if(!S.dmMesesVisiveis)S.dmMesesVisiveis=new Set();S.dmMesesVisiveis.add('${mes}');S.dmMinimized['${mes}']=false;render()">
-      <div style="font-size:.78rem;font-weight:800;color:${cor}">${atras>0?'⚠️ ':''} ${MN[parseInt(m)-1]} ${ano}</div>
+    return`<div style="background:${bg};border-radius:10px;padding:11px 15px;border:1.5px solid ${at>0?'rgba(255,61,90,.3)':'rgba(245,168,0,.3)'};cursor:pointer;min-width:130px" onclick="if(!S.dmMesesVisiveis)S.dmMesesVisiveis=new Set();S.dmMesesVisiveis.add('${mes}');S.dmMinimized['${mes}']=false;render()">
+      <div style="font-size:.78rem;font-weight:800;color:${cor}">${at>0?'⚠️ ':''} ${MN[parseInt(m)-1]} ${ano}</div>
       <div style="font-family:'Instrument Serif',serif;font-size:1.05rem;font-weight:800;color:${cor};margin:3px 0">${fmt(pend)}</div>
       <div style="font-size:.68rem;color:var(--t3)">${itens.filter(d=>d.status!=='pago').length} pendente(s)</div>
     </div>`;
@@ -883,32 +921,34 @@ function rDm(){
     </div>
   </div>`:'<div style="background:var(--gl);border-radius:var(--r);padding:12px 18px;margin-bottom:18px;font-size:.87rem;font-weight:700;color:var(--gd)">✅ Nenhuma pendência em aberto!</div>';
 
-  return`<div class="ph"><div class="ph-t">Despesas do Mês</div><div class="ph-s">Agrupadas por mês · clique no cabeçalho para minimizar</div></div>
+  return`<div class="ph"><div class="ph-t">Despesas</div><div class="ph-s">Mensais e fixas agrupadas por mês</div></div>
   <div class="stats">
     <div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">🧾</div><div class="sc-lbl">Total Geral</div><div class="sc-v r">${fmt(tot)}</div><div class="sc-sub">até mês atual</div></div>
-    <div class="sc"><div class="sc-ac" style="background:var(--g1)"></div><div class="sc-ico" style="background:var(--gl)">✅</div><div class="sc-lbl">Total Pago</div><div class="sc-v g">${fmt(todosAteMesAtual.filter(d=>d.status==='pago').reduce((s,d)=>s+Number(d.valor),0))}</div></div>
+    <div class="sc"><div class="sc-ac" style="background:var(--g1)"></div><div class="sc-ico" style="background:var(--gl)">✅</div><div class="sc-lbl">Total Pago</div><div class="sc-v g">${fmt(totalPago)}</div></div>
     <div class="sc"><div class="sc-ac" style="background:var(--g2)"></div><div class="sc-ico" style="background:var(--rl)">⏳</div><div class="sc-lbl">Total Pendente</div><div class="sc-v r">${fmt(pendente)}</div><div class="sc-sub">${atras} atrasada(s)</div></div>
   </div>
   ${painelPendencias}
-  <div class="sh">
+  <div class="sh" style="flex-wrap:wrap;gap:8px">
     <div class="filtros">
-      <button class="fb ${S.filtroDm==='todos'?'on':''}" onclick="setFDm('todos')">Todos meses</button>
-      <button class="fb ${S.filtroDm==='pago'?'on-g':''}" onclick="setFDm('pago')">✅ Concluídos</button>
-      <button class="fb ${S.filtroDm==='aberto'?'on':''}" onclick="setFDm('aberto')">○ Em aberto</button>
+      <button class="fb ${S.filtroDm==='todos'?'on':''}" onclick="setFDm('todos')">Todos</button>
+      <button class="fb ${S.filtroDm==='pago'?'on-g':''}" onclick="setFDm('pago')">✅ Pagos</button>
+      <button class="fb ${S.filtroDm==='aberto'?'on':''}" onclick="setFDm('aberto')">○ Abertos</button>
       <button class="fb ${S.filtroDm==='atrasado'?'on-r':''}" onclick="setFDm('atrasado')">⚠️ Atrasados</button>
+      <button class="fb ${S.filtroDm==='fixas'?'on':''}" onclick="setFDm('fixas')" style="${S.filtroDm==='fixas'?'background:#0ea5e9;color:#fff;border-color:#0ea5e9':'border-color:#0ea5e9;color:#0ea5e9'}">📌 Fixas</button>
+      <button class="fb ${S.filtroDm==='avulsas'?'on':''}" onclick="setFDm('avulsas')" style="${S.filtroDm==='avulsas'?'background:#f97316;color:#fff;border-color:#f97316':'border-color:#f97316;color:#f97316'}">🧾 Avulsas</button>
       <button class="fb ${S.sortDm==='val-desc'?'on':''}" onclick="setSortDm('val-desc')">↓ Valor</button>
       <button class="fb ${S.sortDm==='val-asc'?'on':''}" onclick="setSortDm('val-asc')">↑ Valor</button>
     </div>
     <div style="display:flex;gap:7px;align-items:center">
-      <button class="btn btn-o btn-sm" onclick="addMesVisivel(-1)">◀ Mês anterior</button>
+      <button class="btn btn-o btn-sm" onclick="addMesVisivel(-1)">◀</button>
       <button class="btn btn-o btn-sm" onclick="addMesVisivel(1)">▶ Próximo mês</button>
       <button class="btn btn-p btn-sm" onclick="openM('add-dm')">+ Normal</button>
       <button class="btn btn-o btn-sm" onclick="openM('add-parc')">🛒 Parcelada</button>
+      <button class="btn btn-y btn-sm" onclick="openM('add-df')">📌 Fixa</button>
     </div>
   </div>
   ${mesesVisiveis.map(renderMes).join('')||'<p style="color:var(--t3);text-align:center;padding:20px;font-weight:600">Nenhuma despesa encontrada.</p>'}`;
 }
-
 function toggleMiniDm(mes){
   if(!S.dmMinimized)S.dmMinimized={};
   S.dmMinimized[mes]=!S.dmMinimized[mes];
