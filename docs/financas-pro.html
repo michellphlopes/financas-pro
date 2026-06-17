@@ -1297,9 +1297,7 @@ function rDm(){
       <button class="fb ${S.sortDm==='val-asc'?'on':''}" onclick="setSortDm('val-asc')">↑ Valor</button>
     </div>
     <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
-      <button class="btn btn-p" onclick="openM('add-dm')">+ Despesa</button>
-      <button class="btn btn-o btn-sm" onclick="openM('add-parc')">🛒 Parcelada</button>
-      <button class="btn btn-y btn-sm" onclick="openM('add-df')">📌 + Fixa</button>
+      <button class="btn btn-p" onclick="openM('add-dm')">+ Adicionar Despesa</button>
       <button class="btn btn-o btn-sm" onclick="addMesVisivel(-1)">◀</button>
       <button class="btn btn-o btn-sm" onclick="addMesVisivel(1)">▶ Próx. mês</button>
     </div>
@@ -1709,6 +1707,62 @@ function copiarParaGH(){
   });
 }
 
+async function saveDesp(e){
+  e.preventDefault();
+  const f=new FormData(e.target);
+  const tipo=f.get('tipo');
+  const nome=f.get('nome');
+  const val=Number(f.get('val'));
+  const data=f.get('data')||td();
+  const notas=f.get('notas')||'';
+
+  if(tipo==='fixa'){
+    const dia=Number(f.get('dia'))||1;
+    const r={id:uid(),nome,valor:val,dia,categoria:'Fixo'};
+    await sb.from('despesas_fixas').insert(r);
+    S.df.push(r);
+    await syncFixas();
+    closeM();toast('Despesa fixa adicionada!');render();
+  } else if(tipo==='parcelada'){
+    const pa=Number(f.get('atual'))||1;
+    const tp=Number(f.get('total'))||1;
+    const at=Number(f.get('atrasadas'))||0;
+    const r={id:uid(),nome,valor:val,categoria:'Parcelado',data,status:at>0?'atrasado':'aberto',historico:[],parcelado:true,parcela_atual:pa,total_parcelas:tp,total_pagar:val*(tp-pa+1),atrasadas_qtd:at,notas};
+    await sb.from('despesas_mes').insert(r);
+    S.dm.push(r);
+    await syncParcelas();
+    closeM();toast('Parcelado adicionado! Total: '+fmt(r.total_pagar));render();
+  } else {
+    const r={id:uid(),nome,valor:val,categoria:'Outros',data,status:'aberto',historico:[],parcelado:false,notas};
+    await sb.from('despesas_mes').insert(r);
+    S.dm.push(r);
+    closeM();toast('Despesa adicionada!');render();
+  }
+}
+
+function prevDesp(){
+  const f=document.getElementById('fdesp');
+  if(!f)return;
+  const tipo=f.querySelector('[name=tipo]')?.value;
+  // Show/hide sections
+  const sf=document.getElementById('desp-fixa');
+  const sp=document.getElementById('desp-parc');
+  if(sf) sf.style.display=tipo==='fixa'?'block':'none';
+  if(sp) sp.style.display=tipo==='parcelada'?'block':'none';
+  // Parcela preview
+  if(tipo==='parcelada'){
+    const val=Number(f.querySelector('[name=val]')?.value)||0;
+    const atual=Number(f.querySelector('[name=atual]')?.value)||1;
+    const total=Number(f.querySelector('[name=total]')?.value)||0;
+    const prev=document.getElementById('parc-prev');
+    if(val&&total&&prev){
+      const restantes=total-atual+1;
+      prev.style.display='block';
+      prev.innerHTML='🛒 Parcela '+atual+'/'+total+' · Restam '+restantes+'x de '+fmt(val)+' · Total: <strong>'+fmt(val*restantes)+'</strong>';
+    }
+  }
+}
+
 function setFDm(f){S.filtroDm=f;render();}
 function setSortDm(s){S.sortDm=s;render();}
 
@@ -1735,7 +1789,7 @@ function closeM(){S.modal=null;S.mdata=null;const m=document.getElementById('mwr
 
 function buildModal(){
   const CATS=['Alimentação','Moradia','Transporte','Saúde','Lazer','Educação','Outros'];
-  const TITLES={'add-div':'Nova Dívida','edit-div':'Editar Dívida','lanc-div':'Registrar Pagamento','log-div':'Histórico da Dívida','add-cred':'Novo Crédito','edit-cred':'Editar Crédito','lanc-cred':'Novo Lançamento','log-cred':'Histórico do Crédito','add-cart':'Novo Cartão','edit-cart':'Atualizar Fatura','add-dm':'Nova Despesa','add-parc':'Nova Compra Parcelada','det-dm':'Detalhes da Despesa','edit-dm':'Editar Despesa','lanc-dm':'Novo Lançamento','hist-dm':'Histórico','add-df':'Nova Despesa Fixa','add-obs':'Nova Observação','cal-day':'Eventos do Dia'};
+  const TITLES={'add-div':'Nova Dívida','edit-div':'Editar Dívida','lanc-div':'Registrar Pagamento','log-div':'Histórico da Dívida','add-cred':'Novo Crédito','edit-cred':'Editar Crédito','lanc-cred':'Novo Lançamento','log-cred':'Histórico do Crédito','add-cart':'Novo Cartão','edit-cart':'Atualizar Fatura','add-dm':'Nova Despesa','add-parc':'Nova Despesa','add-df':'Nova Despesa','det-dm':'Detalhes da Despesa','edit-dm':'Editar Despesa','lanc-dm':'Novo Lançamento','hist-dm':'Histórico','add-obs':'Nova Observação','cal-day':'Eventos do Dia'};
   let body='';
   if(S.modal==='add-div')body=`<form onsubmit="saveDiv(event)"><div class="frow"><div class="fg"><label>Nome da Dívida</label><input name="nome" required placeholder="Ex: Empréstimo banco"/></div><div class="fg"><label>Valor Total (R$)</label><input name="valor" type="number" step="0.01" required/></div></div><div class="frow"><div class="fg"><label>Juros</label><input name="juros" type="number" step="0.01" placeholder="0"/></div><div class="fg"><label>Tipo</label><select name="tj"><option value="%">% ao mês</option><option value="R$">Valor fixo (R$)</option></select></div></div><div class="fg"><label>Vencimento</label><input name="venc" type="date"/></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`;
   if(S.modal==='edit-div'){const d=S.dividas.find(x=>x.id===S.mdata);body=d?`<div class="info-box">Edições ficam no histórico.</div><form onsubmit="editDiv(event)"><div class="frow"><div class="fg"><label>Nome</label><input name="nome" required value="${d.nome}"/></div><div class="fg"><label>Valor (R$)</label><input name="valor" type="number" step="0.01" value="${d.valor}" required/></div></div><div class="frow"><div class="fg"><label>Juros</label><input name="juros" type="number" step="0.01" value="${d.juros||0}"/></div><div class="fg"><label>Tipo</label><select name="tj"><option value="%" ${d.tipo_juros==='%'?'selected':''}>% ao mês</option><option value="R$" ${d.tipo_juros==='R$'?'selected':''}>Valor fixo (R$)</option></select></div></div><div class="frow"><div class="fg"><label>Vencimento</label><input name="venc" type="date" value="${d.vencimento||''}"/></div><div class="fg"><label>Motivo</label><input name="obs" placeholder="Ex: Renegociação"/></div></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`:'<p>Não encontrado.</p>';}
@@ -1781,9 +1835,37 @@ function buildModal(){
   if(S.modal==='log-cred'){const c=S.creditos.find(x=>x.id===S.mdata);const log=c?[...(c.log||[])].reverse():[];body=`<div class="info-box">📋 Histórico inalterável — edições e recebimentos</div>`+(log.length?`<table class="tbl"><thead><tr><th>Data</th><th>Tipo</th><th>Valor</th><th>Obs.</th></tr></thead><tbody>${log.map(h=>`<tr><td>${h.data}</td><td><span class="badge ${h.tipo==='recebimento'?'bg-g':'bg-b'}">${h.tipo||'edição'}</span></td><td style="font-weight:700;color:var(--gd)">${h.valor?fmt(h.valor):''}</td><td style="font-size:.8rem">${h.obs||''} ${h.para?'→ '+h.para:''}</td></tr>`).join('')}</tbody></table>`:'<p style="text-align:center;padding:20px;color:var(--t3)">Nenhum registro.</p>');}
   if(S.modal==='add-cart')body=`<form onsubmit="saveCart(event)"><div class="frow"><div class="fg"><label>Nome</label><input name="nome" required/></div><div class="fg"><label>Limite (R$)</label><input name="lim" type="number" step="0.01" required/></div></div><div class="frow"><div class="fg"><label>Fatura Atual</label><input name="sal" type="number" step="0.01"/></div><div class="fg"><label>Juros % a.m.</label><input name="juros" type="number" step="0.01"/></div></div><div class="frow"><div class="fg"><label>Dia Vcto</label><input name="venc" type="number" min="1" max="31"/></div><div class="fg"><label>Dia Fech.</label><input name="fech" type="number" min="1" max="31"/></div></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`;
   if(S.modal==='edit-cart'){const c=S.cartoes.find(x=>x.id===S.mdata);body=`<form onsubmit="updFatura(event)"><div class="fg"><label>Novo valor da fatura — ${c?c.nome:''}</label><input name="sal" type="number" step="0.01" value="${c?Number(c.saldo_atual||0):0}" required/></div><button class="btn btn-p btn-full" type="submit">Atualizar</button></form>`;}
-  if(S.modal==='add-dm')body=`<form onsubmit="saveDm(event)"><div class="frow"><div class="fg"><label>Descrição</label><input name="nome" required/></div><div class="fg"><label>Valor (R$)</label><input name="val" type="number" step="0.01" required/></div></div><div class="frow"><div class="fg"><label>Categoria</label><select name="cat">${CATS.map(c=>`<option>${c}</option>`).join('')}</select></div><div class="fg"><label>Data</label><input name="data" type="date" value="${td()}"/></div></div><div class="fg"><label>Notas (opcional)</label><input name="notas" placeholder="Observações, detalhes..."/></div><button class="btn btn-p btn-full" type="submit"><div class='fg'><label>Notas (opcional)</label><input name='notas' placeholder='Observações, detalhes...'/></div>Salvar</button></form>`;
-  if(S.modal==='add-parc')body=`<form onsubmit="saveParc(event)" id="fparc"><div class="frow"><div class="fg"><label>Descrição</label><input name="nome" required placeholder="Ex: TV Samsung"/></div><div class="fg"><label>Valor da Parcela (R$)</label><input name="val" type="number" step="0.01" required oninput="calcPrev()"/></div></div><div class="frow3"><div class="fg"><label>Parcela atual</label><input name="atual" type="number" min="1" value="1" required oninput="calcPrev()"/></div><div class="fg"><label>Total parcelas</label><input name="total" type="number" min="1" required oninput="calcPrev()"/></div><div class="fg"><label>Parcelas atrasadas</label><input name="atrasadas" type="number" min="0" value="0"/></div></div><div class="warn-box">ℹ️ Se tiver parcelas atrasadas, informe o número acima. A despesa será marcada como atrasada.</div><div class="fg"><label>Data da parcela atual</label><input name="data" type="date" value="${td()}"/></div><div id="parc-prev" style="display:none;background:var(--pll);border-radius:var(--rsm);padding:11px 13px;font-size:.85rem;color:var(--pu);font-weight:700;margin-bottom:14px"></div><button class="btn btn-p btn-full" type="submit">Salvar Parcelado</button></form>`;
-  if(S.modal==='det-dm'){const d=S.dm.find(x=>x.id===S.mdata);if(!d)body='<p>Não encontrado.</p>';else{const isPg=d.status==='pago';const isAt=d.status==='atrasado'||(d.data<td()&&d.status==='aberto');body=`<div style="background:${isPg?'var(--gl)':isAt?'var(--rl)':'var(--s2)'};border-radius:var(--rsm);padding:13px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between"><div><div style="font-weight:800;color:var(--tx);font-size:1.02rem">${d.nome}</div><div style="font-size:.77rem;color:var(--t3);margin-top:2px">${d.data} · ${d.categoria}</div>${d.parcelado?`<div class="pt" style="margin-top:5px">📦 Parcela ${d.parcela_atual}/${d.total_parcelas} · Total: ${fmt(d.total_pagar)}${(d.atrasadas_qtd||0)>0?` · ⚠️ ${d.atrasadas_qtd} atrasada(s)`:''}</div>`:''}</div><div style="text-align:right"><div style="font-family:'Instrument Serif',serif;font-size:1.25rem;font-weight:700;color:var(--rd)">${fmt(d.valor)}</div><button class="sp ${isPg?'sp-pg':isAt?'sp-at':'sp-ab'}" onclick="cycDm('${d.id}');closeM()">${isPg?'✅ Pago':isAt?'⚠️ Atrasado':'○ Aberto'}</button></div></div><div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${d.categoria!=='Juros Dívida'?`<button class="btn btn-y btn-sm" onclick="S.modal='edit-dm';render()">✏️ Editar</button>`:''}${d.categoria!=='Juros Dívida'?`<button class="btn btn-o btn-sm" onclick="S.modal='lanc-dm';render()">+ Lançamento</button>`:''}<button class="btn btn-o btn-sm" onclick="S.modal='hist-dm';render()">📋 Histórico (${(d.historico||[]).length})</button>${d.categoria!=='Juros Dívida'?`<button class="btn btn-d btn-sm" onclick="remDm('${d.id}');closeM()">Remover</button>`:''}</div>`;}}
+  if(S.modal==='add-dm'||S.modal==='add-parc'||S.modal==='add-df'){
+    const ti=S.modal==='add-parc'?'parcelada':S.modal==='add-df'?'fixa':'avulsa';
+    body=`<form onsubmit="saveDesp(event)" id="fdesp">
+    <div class="fg"><label>Descrição</label><input name="nome" required placeholder="Ex: Aluguel, Netflix, TV Samsung..."/></div>
+    <div class="frow">
+      <div class="fg"><label>Valor (R$)</label><input name="val" type="number" step="0.01" required oninput="prevDesp()"/></div>
+      <div class="fg"><label>Data</label><input name="data" type="date" value="${td()}"/></div>
+    </div>
+    <div class="fg"><label>Tipo</label>
+      <select name="tipo" onchange="prevDesp()" style="font-weight:700">
+        <option value="avulsa" ${ti==='avulsa'?'selected':''}>🧾 Avulsa — despesa única</option>
+        <option value="fixa" ${ti==='fixa'?'selected':''}>📌 Fixa — repete todo mês</option>
+        <option value="parcelada" ${ti==='parcelada'?'selected':''}>🛒 Parcelada — compra em parcelas</option>
+      </select>
+    </div>
+    <div id="desp-fixa" style="display:${ti==='fixa'?'block':'none'}">
+      <div class="fg"><label>Dia de vencimento (todo mês)</label><input name="dia" type="number" min="1" max="31" placeholder="Ex: 10"/></div>
+    </div>
+    <div id="desp-parc" style="display:${ti==='parcelada'?'block':'none'}">
+      <div class="frow3">
+        <div class="fg"><label>Parcela atual</label><input name="atual" type="number" min="1" value="1" oninput="prevDesp()"/></div>
+        <div class="fg"><label>Total parcelas</label><input name="total" type="number" min="1" oninput="prevDesp()"/></div>
+        <div class="fg"><label>Parcelas atrasadas</label><input name="atrasadas" type="number" min="0" value="0"/></div>
+      </div>
+      <div id="parc-prev" style="display:none;background:var(--pll);border-radius:var(--rsm);padding:11px 13px;font-size:.85rem;color:var(--pu);font-weight:700;margin-bottom:8px"></div>
+      <div class="warn-box">ℹ️ Informe parcelas atrasadas se houver — a despesa será marcada como atrasada automaticamente.</div>
+    </div>
+    <div class="fg"><label>Notas (opcional)</label><input name="notas" placeholder="Observações..."/></div>
+    <button class="btn btn-p btn-full" type="submit">Salvar Despesa</button>
+  </form>`;
+  }
   if(S.modal==='edit-dm'){const d=S.dm.find(x=>x.id===S.mdata);body=d?`<div class="info-box">Edições ficam no histórico.</div><form onsubmit="editDm(event)"><div class="frow"><div class="fg"><label>Nome</label><input name="nome" value="${d.nome}" required/></div><div class="fg"><label>Valor</label><input name="val" type="number" step="0.01" value="${d.valor}" required/></div></div><div class="frow"><div class="fg"><label>Categoria</label><select name="cat">${CATS.map(c=>`<option ${d.categoria===c?'selected':''}>${c}</option>`).join('')}</select></div><div class="fg"><label>Data</label><input name="data" type="date" value="${d.data}"/></div></div><div class="fg"><label>Motivo</label><input name="obs" placeholder="Por que editou?"/></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`:'<p>Não encontrado.</p>';}
   if(S.modal==='lanc-dm')body=`<form onsubmit="lancDm(event)"><div class="frow"><div class="fg"><label>Data</label><input name="data" type="date" value="${td()}" required/></div><div class="fg"><label>Valor (R$)</label><input name="val" type="number" step="0.01" required/></div></div><div class="fg"><label>Observação</label><input name="obs" placeholder="Ex: Pagamento parcial"/></div><button class="btn btn-p btn-full" type="submit">Salvar</button></form>`;
   if(S.modal==='hist-dm'){const d=S.dm.find(x=>x.id===S.mdata);const hist=d?[...(d.historico||[])].reverse():[];body=`<div class="info-box">📋 Histórico inalterável</div>`+(hist.length?`<table class="tbl"><thead><tr><th>Data</th><th>Valor</th><th>Obs.</th></tr></thead><tbody>${hist.map(h=>`<tr><td>${h.data}</td><td style="color:var(--gd);font-weight:700">${h.valor?fmt(h.valor):''}</td><td>${h.obs||h.para||'—'}</td></tr>`).join('')}</tbody></table>`:'<p style="text-align:center;padding:20px;color:var(--t3)">Nenhum lançamento.</p>');}
