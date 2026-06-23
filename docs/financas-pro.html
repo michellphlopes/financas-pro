@@ -335,7 +335,7 @@ async function loadAll(){
       sb.from('dividas').select('*'),
       sb.from('creditos').select('*'),
       sb.from('cartoes').select('*'),
-      sb.from('despesas_mes').select('*').range(0,2000),
+      sb.from('despesas_mes').select('*').range(0,9999),
       sb.from('despesas_fixas').select('*'),
       sb.from('estrategia').select('*').eq('id','main').maybeSingle(),
       sb.from('cal_obs').select('*')
@@ -443,7 +443,10 @@ async function syncFixas(){
   }
 }
 async function syncParcelas(){
-  // Só usa registros ORIGINAIS (sem origem_parcela e sem ID parc_parc_)
+  const hoje=new Date();
+  const maxMeses=12; // Máximo 12 meses futuros
+  const maxData=new Date(hoje.getFullYear(),hoje.getMonth()+maxMeses,1).toISOString().slice(0,7);
+
   const parceladas=S.dm.filter(d=>
     d.parcelado &&
     d.parcela_atual &&
@@ -454,21 +457,22 @@ async function syncParcelas(){
 
   const novos=[];
   for(const parc of parceladas){
-    const restantes=parc.total_parcelas - parc.parcela_atual;
+    const restantes=parc.total_parcelas-parc.parcela_atual;
     if(restantes<=0) continue;
     const [anoBase,mesBase,diaBase]=(parc.data||td()).split('-');
     const dia=parseInt(diaBase)||1;
-    // baseId: remove prefixo parc_ se existir para não duplicar
     const baseId=parc.id.replace(/^parc_/,'');
 
     for(let offset=1;offset<=restantes;offset++){
       const d=new Date(parseInt(anoBase),parseInt(mesBase)-1+offset,1);
       const ano=d.getFullYear();
       const mes=String(d.getMonth()+1).padStart(2,'0');
+      const mesStr=ano+'-'+mes;
+      // Só cria até 12 meses futuros
+      if(mesStr>maxData) break;
       const ultimoDia=new Date(ano,d.getMonth()+1,0).getDate();
       const diaFinal=String(Math.min(dia,ultimoDia)).padStart(2,'0');
       const idFuturo='parc_'+baseId+'_'+ano+'_'+mes;
-      // Só adiciona se não existe no state
       if(S.dm.find(x=>x.id===idFuturo)) continue;
       novos.push({
         id:idFuturo,
@@ -490,13 +494,12 @@ async function syncParcelas(){
 
   if(novos.length>0){
     S.dm.push(...novos);
-    // Verifica quais já existem no banco
     const ids=novos.map(r=>r.id);
     const {data:exist}=await sb.from('despesas_mes').select('id').in('id',ids);
     const existSet=new Set((exist||[]).map(x=>x.id));
-    const reaisNovos=novos.filter(r=>!existSet.has(r.id));
-    for(let i=0;i<reaisNovos.length;i+=50){
-      await sb.from('despesas_mes').insert(reaisNovos.slice(i,i+50));
+    const reais=novos.filter(r=>!existSet.has(r.id));
+    for(let i=0;i<reais.length;i+=50){
+      await sb.from('despesas_mes').insert(reais.slice(i,i+50));
     }
   }
 }
